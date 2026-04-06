@@ -519,7 +519,7 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: 'center',
-    marginBottom: SPACING.lg,
+    marginBottom: SPACING.sm,
     width: '100%',
   },
   title: {
@@ -554,10 +554,10 @@ const styles = StyleSheet.create({
     color: '#92400E',
   },
   statusContainer: {
-    minHeight: 140,
+    minHeight: 100,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: SPACING.base,
+    marginBottom: SPACING.xs,
     width: '100%',
   },
   statusSection: {
@@ -676,12 +676,12 @@ const styles = StyleSheet.create({
     fontWeight: FONTS.medium,
   },
   buttonSection: {
-    marginVertical: SPACING.lg,
+    marginVertical: SPACING.sm,
     alignItems: 'center',
     width: '100%',
   },
   quickActionsRow: {
-    marginTop: SPACING.xl,
+    marginTop: SPACING.md,
     alignItems: 'center',
     width: '100%',
   },
