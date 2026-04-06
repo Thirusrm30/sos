@@ -10,6 +10,7 @@ import {
   Linking,
   Vibration,
   Animated,
+  Easing,
 } from 'react-native';
 import { COLORS, LOCATION_UPDATE_INTERVAL, FONTS, SPACING, RADIUS, SHADOWS } from '../utils/constants';
 import { getCurrentLocation } from '../services/locationService';
@@ -41,8 +42,11 @@ const ActiveTripScreen = ({ route, navigation }) => {
   const checkStatusIntervalRef = useRef(null);
   const checkInTimerRef = useRef(null);
   const nextCheckInTimerRef = useRef(null);
+  const isMountedRef = useRef(true);
 
   useEffect(() => {
+    isMountedRef.current = true;
+    
     const pulse = Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, {
@@ -61,51 +65,80 @@ const ActiveTripScreen = ({ route, navigation }) => {
 
     initializeCheckIn();
     fetchAndUpdateLocation();
+    
     locationIntervalRef.current = setInterval(fetchAndUpdateLocation, LOCATION_UPDATE_INTERVAL_MOBILE);
     checkStatusIntervalRef.current = setInterval(checkTripStatus, 60000);
     fetchTripDetails();
 
     return () => {
+      isMountedRef.current = false;
+      pulse.stop();
       cleanupTimers();
     };
   }, []);
 
-  const cleanupTimers = () => {
-    if (locationIntervalRef.current) clearInterval(locationIntervalRef.current);
-    if (checkStatusIntervalRef.current) clearInterval(checkStatusIntervalRef.current);
-    if (checkInTimerRef.current) clearInterval(checkInTimerRef.current);
-    if (nextCheckInTimerRef.current) clearTimeout(nextCheckInTimerRef.current);
-  };
+  const cleanupTimers = useCallback(() => {
+    if (locationIntervalRef.current) {
+      clearInterval(locationIntervalRef.current);
+      locationIntervalRef.current = null;
+    }
+    if (checkStatusIntervalRef.current) {
+      clearInterval(checkStatusIntervalRef.current);
+      checkStatusIntervalRef.current = null;
+    }
+    if (checkInTimerRef.current) {
+      clearInterval(checkInTimerRef.current);
+      checkInTimerRef.current = null;
+    }
+    if (nextCheckInTimerRef.current) {
+      clearTimeout(nextCheckInTimerRef.current);
+      nextCheckInTimerRef.current = null;
+    }
+  }, []);
 
   const initializeCheckIn = async () => {
-    const hasPermission = await requestNotificationPermissions();
-    if (hasPermission) {
-      setCheckInEnabled(true);
-      startCheckInTimer();
+    try {
+      const hasPermission = await requestNotificationPermissions();
+      if (hasPermission && isMountedRef.current) {
+        setCheckInEnabled(true);
+        startCheckInTimer();
+      }
+    } catch (error) {
+      console.error('Error initializing check-in:', error);
     }
   };
 
-  const startCheckInTimer = () => {
+  const startCheckInTimer = useCallback(() => {
     const scheduleNextCheckIn = () => {
+      if (!isMountedRef.current) return;
+      
       setNextCheckInTime(Date.now() + CHECKIN_INTERVAL);
       
-      if (nextCheckInTimerRef.current) clearTimeout(nextCheckInTimerRef.current);
+      if (nextCheckInTimerRef.current) {
+        clearTimeout(nextCheckInTimerRef.current);
+      }
       nextCheckInTimerRef.current = setTimeout(() => {
         handleMissedCheckIn();
       }, CHECKIN_INTERVAL);
     };
 
-    showCheckInNotification(tripId);
-    scheduleNextCheckIn();
-
-    if (checkInTimerRef.current) clearInterval(checkInTimerRef.current);
-    checkInTimerRef.current = setInterval(() => {
+    if (tripId) {
       showCheckInNotification(tripId);
       scheduleNextCheckIn();
-    }, CHECKIN_INTERVAL);
-  };
+
+      if (checkInTimerRef.current) {
+        clearInterval(checkInTimerRef.current);
+      }
+      checkInTimerRef.current = setInterval(() => {
+        showCheckInNotification(tripId);
+        scheduleNextCheckIn();
+      }, CHECKIN_INTERVAL);
+    }
+  }, [tripId]);
 
   const handleCheckInConfirm = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    
     try {
       setLastCheckIn(new Date());
       setMissedCheckIns(0);
@@ -123,10 +156,16 @@ const ActiveTripScreen = ({ route, navigation }) => {
   }, [tripId]);
 
   const handleMissedCheckIn = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    
     const newMissedCount = missedCheckIns + 1;
     setMissedCheckIns(newMissedCount);
     
-    await sendCheckInStatus(tripId, 'missed', newMissedCount);
+    try {
+      await sendCheckInStatus(tripId, 'missed', newMissedCount);
+    } catch (error) {
+      console.error('Error sending check-in status:', error);
+    }
     
     if (newMissedCount >= MAX_MISSED_CHECKINS) {
       Alert.alert(
@@ -135,10 +174,14 @@ const ActiveTripScreen = ({ route, navigation }) => {
         [{ text: 'OK' }]
       );
       
-      if (currentLocation) {
-        await sendSOSAlert(currentLocation.lat, currentLocation.lng);
-      } else {
-        await sendSOSAlert(0, 0);
+      try {
+        if (currentLocation) {
+          await sendSOSAlert(currentLocation.lat, currentLocation.lng);
+        } else {
+          await sendSOSAlert(0, 0);
+        }
+      } catch (error) {
+        console.error('Error sending SOS:', error);
       }
       
       cleanupTimers();
@@ -150,9 +193,11 @@ const ActiveTripScreen = ({ route, navigation }) => {
         [{ text: 'OK' }]
       );
     }
-  }, [tripId, missedCheckIns, currentLocation]);
+  }, [tripId, missedCheckIns, currentLocation, cleanupTimers]);
 
   const fetchTripDetails = async () => {
+    if (!isMountedRef.current) return;
+    
     try {
       const result = await getTripDetails(tripId);
       if (result.success && result.trip) {
@@ -164,25 +209,31 @@ const ActiveTripScreen = ({ route, navigation }) => {
   };
 
   const fetchAndUpdateLocation = async () => {
+    if (!isMountedRef.current) return;
+    
     try {
       const location = await getCurrentLocation();
-      if (location) {
+      if (location && isMountedRef.current) {
         setCurrentLocation(location);
         setLocationError(null);
         await updateTripLocation(tripId, location.lat, location.lng);
-      } else {
+      } else if (isMountedRef.current) {
         setLocationError('Unable to get location');
       }
     } catch (error) {
       console.error('Error updating location:', error);
-      setLocationError('Error updating location');
+      if (isMountedRef.current) {
+        setLocationError('Error updating location');
+      }
     }
   };
 
   const checkTripStatus = async () => {
+    if (!isMountedRef.current) return;
+    
     try {
       const result = await getTripDetails(tripId);
-      if (result.success && result.trip) {
+      if (result.success && result.trip && isMountedRef.current) {
         if (result.trip.isMarkedSafe) {
           setIsMarkedSafe(true);
           Alert.alert(
@@ -197,7 +248,7 @@ const ActiveTripScreen = ({ route, navigation }) => {
     }
   };
 
-  const handleMarkSafe = async () => {
+  const handleMarkSafe = () => {
     Alert.alert(
       '🛡️ Mark as Safe',
       'Are you sure you want to end this trip and mark yourself as safe?',
@@ -226,7 +277,9 @@ const ActiveTripScreen = ({ route, navigation }) => {
               console.error('Error marking safe:', error);
               Alert.alert('Error', 'Failed to mark as safe. Please try again.');
             } finally {
-              setLoading(false);
+              if (isMountedRef.current) {
+                setLoading(false);
+              }
             }
           },
         },

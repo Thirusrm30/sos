@@ -1,10 +1,34 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, StatusBar } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, StatusBar, Animated, Easing } from 'react-native';
 import { useFakeCall } from '../context/FakeCallContext';
-import { COLORS, FONTS, SPACING } from '../utils/constants';
+import { COLORS, FONTS, SPACING, RADIUS } from '../utils/constants';
 
 const FakeCallActiveScreen = () => {
   const { callerName, callDuration, endCall, isCallActive } = useFakeCall();
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (isCallActive) {
+      const pulse = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1.05,
+            duration: 1200,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 1200,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      pulse.start();
+      return () => pulse.stop();
+    }
+  }, [isCallActive]);
 
   if (!isCallActive) return null;
 
@@ -21,33 +45,50 @@ const FakeCallActiveScreen = () => {
       
       <View style={styles.content}>
         <View style={styles.avatarContainer}>
-          <View style={styles.avatar}>
+          <Animated.View style={[styles.avatar, { transform: [{ scale: pulseAnim }] }]}>
             <Text style={styles.avatarText}>
               {callerName ? callerName.charAt(0).toUpperCase() : 'M'}
             </Text>
-          </View>
+          </Animated.View>
         </View>
 
         <Text style={styles.callerName}>{callerName || 'Mom'}</Text>
-        <Text style={styles.callStatus}>00:{formatDuration(callDuration)}</Text>
+        <Text style={styles.callStatus}>{formatDuration(callDuration)}</Text>
 
         <View style={styles.callInfo}>
-          <Text style={styles.callInfoText}>📞 Calling...</Text>
+          <View style={styles.callBadge}>
+            <Text style={styles.callBadgeText}>📞 Connected</Text>
+          </View>
         </View>
 
         <View style={styles.muteOptions}>
-          <TouchableOpacity style={styles.muteButton}>
-            <Text style={styles.muteIcon}>🔇</Text>
+          <TouchableOpacity style={styles.muteButton} activeOpacity={0.7}>
+            <View style={styles.muteIconContainer}>
+              <Text style={styles.muteIcon}>🔇</Text>
+            </View>
             <Text style={styles.muteText}>Mute</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.muteButton}>
-            <Text style={styles.muteIcon}>🔊</Text>
+          <TouchableOpacity style={styles.muteButton} activeOpacity={0.7}>
+            <View style={styles.muteIconContainer}>
+              <Text style={styles.muteIcon}>🔊</Text>
+            </View>
             <Text style={styles.muteText}>Speaker</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.muteButton} activeOpacity={0.7}>
+            <View style={styles.muteIconContainer}>
+              <Text style={styles.muteIcon}>⏸️</Text>
+            </View>
+            <Text style={styles.muteText}>Hold</Text>
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={styles.endCallButton} onPress={endCall}>
+        <TouchableOpacity 
+          style={styles.endCallButton} 
+          onPress={endCall}
+          activeOpacity={0.7}
+        >
           <View style={styles.endCallButtonInner}>
             <Text style={styles.endCallIcon}>📵</Text>
           </View>
@@ -67,8 +108,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     backgroundColor: '#1a1a2e',
     zIndex: 9999,
-    justifyContent: 'center',
-    alignItems: 'center',
+    elevation: 9999,
   },
   headerPattern: {
     position: 'absolute',
@@ -77,16 +117,19 @@ const styles = StyleSheet.create({
     right: 0,
     height: 200,
     backgroundColor: '#16213e',
-    borderBottomLeftRadius: 100,
-    borderBottomRightRadius: 100,
+    borderBottomLeftRadius: 60,
+    borderBottomRightRadius: 60,
   },
   content: {
+    flex: 1,
     alignItems: 'center',
+    justifyContent: 'center',
     zIndex: 1,
     width: '100%',
+    paddingHorizontal: SPACING.lg,
   },
   avatarContainer: {
-    marginBottom: SPACING.lg,
+    marginBottom: SPACING.xl,
   },
   avatar: {
     width: 100,
@@ -103,21 +146,31 @@ const styles = StyleSheet.create({
   },
   callerName: {
     fontSize: FONTS['2xl'],
-    fontWeight: FONTS.semibold,
+    fontWeight: FONTS.bold,
     color: COLORS.textInverse,
     marginBottom: SPACING.xs,
+    textAlign: 'center',
   },
   callStatus: {
-    fontSize: FONTS.lg,
+    fontSize: FONTS['2xl'],
     color: COLORS.success,
     marginBottom: SPACING.base,
+    fontWeight: FONTS.medium,
+    fontVariant: ['tabular-nums'],
   },
   callInfo: {
     marginBottom: SPACING.xl,
   },
-  callInfoText: {
+  callBadge: {
+    backgroundColor: 'rgba(34, 197, 94, 0.2)',
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.full,
+  },
+  callBadgeText: {
     fontSize: FONTS.base,
-    color: COLORS.textMuted,
+    color: COLORS.success,
+    fontWeight: FONTS.medium,
   },
   muteOptions: {
     flexDirection: 'row',
@@ -128,13 +181,22 @@ const styles = StyleSheet.create({
   muteButton: {
     alignItems: 'center',
   },
+  muteIconContainer: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: SPACING.sm,
+  },
   muteIcon: {
-    fontSize: 28,
-    marginBottom: SPACING.xs,
+    fontSize: 24,
   },
   muteText: {
     fontSize: FONTS.sm,
-    color: COLORS.textInverse,
+    color: 'rgba(255,255,255,0.7)',
+    fontWeight: FONTS.medium,
   },
   endCallButton: {
     alignItems: 'center',
@@ -154,7 +216,8 @@ const styles = StyleSheet.create({
   },
   endCallText: {
     fontSize: FONTS.md,
-    color: COLORS.textInverse,
+    color: 'rgba(255,255,255,0.8)',
+    fontWeight: FONTS.medium,
   },
 });
 

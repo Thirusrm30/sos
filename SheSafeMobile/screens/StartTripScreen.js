@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../utils/constants';
 import { getCurrentLocation } from '../services/locationService';
 import { startTrip } from '../services/tripService';
 import { geocodeAddress } from '../services/geocodingService';
+import NetworkStatus from '../components/NetworkStatus';
 
 const StartTripScreen = ({ navigation }) => {
   const [destination, setDestination] = useState('');
@@ -23,6 +24,9 @@ const StartTripScreen = ({ navigation }) => {
   const [minutes, setMinutes] = useState('0');
   const [loading, setLoading] = useState(false);
   const [geocoding, setGeocoding] = useState(false);
+  const [errors, setErrors] = useState({});
+  const [resolvedAddress, setResolvedAddress] = useState(null);
+  const [destCoords, setDestCoords] = useState(null);
 
   const parseCoordinates = (input) => {
     if (!input) return null;
@@ -38,11 +42,32 @@ const StartTripScreen = ({ navigation }) => {
     return null;
   };
 
-  const handleStartTrip = async () => {
-    if (!destination.trim()) {
-      Alert.alert('Required', 'Please enter a destination');
-      return;
+  const handleDestinationChange = useCallback((text) => {
+    setDestination(text);
+    // Reset resolved state when user types
+    setResolvedAddress(null);
+    setDestCoords(null);
+    // Check if it's raw coordinates
+    const coords = parseCoordinates(text);
+    if (coords) {
+      setDestCoords(coords);
+      setResolvedAddress(text);
     }
+  }, []);
+
+  const validateForm = useCallback(() => {
+    const newErrors = {};
+    
+    if (!destination.trim()) {
+      newErrors.destination = 'Destination is required';
+    }
+    
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  }, [destination]);
+
+  const handleStartTrip = async () => {
+    if (!validateForm()) return;
 
     setLoading(true);
 
@@ -55,20 +80,30 @@ const StartTripScreen = ({ navigation }) => {
         return;
       }
 
-      let destCoords = parseCoordinates(destination);
+      let finalCoords = destCoords;
       let destAddress = destination;
 
-      if (!destCoords) {
-        setLoading(false);
-        Alert.alert(
-          'Geocode Required',
-          'Please enter coordinates (e.g., "12.95, 77.65") or use the "Search Address" button to find your destination.',
-          [{ text: 'OK' }]
-        );
-        return;
-      }
+      // If no coords yet, auto-geocode the place name
+      if (!finalCoords) {
+        setGeocoding(true);
+        const geoResult = await geocodeAddress(destination);
+        setGeocoding(false);
 
-      setLoading(true);
+        if (geoResult.success) {
+          finalCoords = { lat: geoResult.data.lat, lng: geoResult.data.lng };
+          destAddress = geoResult.data.formattedAddress;
+          setDestCoords(finalCoords);
+          setResolvedAddress(destAddress);
+        } else {
+          Alert.alert(
+            'Address Not Found',
+            `Could not find "${destination}". Please try a more specific name like "Avadi, Chennai" or "Ayapakkam, Tamil Nadu".`,
+            [{ text: 'OK' }]
+          );
+          setLoading(false);
+          return;
+        }
+      }
 
       const etaHours = parseInt(hours) || 0;
       const etaMinutes = parseInt(minutes) || 0;
@@ -76,7 +111,7 @@ const StartTripScreen = ({ navigation }) => {
 
       const result = await startTrip(
         { lat: location.lat, lng: location.lng, address: 'Current Location' },
-        { lat: destCoords.lat, lng: destCoords.lng, address: destAddress },
+        { lat: finalCoords.lat, lng: finalCoords.lng, address: destAddress },
         eta
       );
 
@@ -100,7 +135,6 @@ const StartTripScreen = ({ navigation }) => {
       } else {
         Alert.alert('Error', result.message || 'Failed to start trip');
       }
-
     } catch (error) {
       console.error('Error starting trip:', error);
       Alert.alert('Error', 'Failed to start trip. Please check your connection.');
@@ -115,21 +149,21 @@ const StartTripScreen = ({ navigation }) => {
       return;
     }
 
+    // Already resolved
+    if (destCoords && resolvedAddress) return;
+
     setGeocoding(true);
     const result = await geocodeAddress(destination);
     setGeocoding(false);
 
     if (result.success) {
       setDestination(result.data.formattedAddress);
-      Alert.alert(
-        'Address Found!',
-        `Location: ${result.data.formattedAddress}\n\nYou can now start your trip with coordinates.\n\nLat: ${result.data.lat.toFixed(6)}\nLng: ${result.data.lng.toFixed(6)}`,
-        [{ text: 'OK' }]
-      );
+      setResolvedAddress(result.data.formattedAddress);
+      setDestCoords({ lat: result.data.lat, lng: result.data.lng });
     } else {
       Alert.alert(
         'Address Not Found',
-        `${result.message}\n\nPlease try a more specific address (e.g., "123 MG Road, Bangalore") or enter coordinates (e.g., "12.95, 77.65")`
+        `${result.message}\n\nTry a place name like "Avadi, Chennai" or enter coordinates (e.g., "12.95, 77.65")`
       );
     }
   };
@@ -137,13 +171,17 @@ const StartTripScreen = ({ navigation }) => {
   return (
     <KeyboardAvoidingView 
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 20}
     >
       <ScrollView 
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
+        <NetworkStatus position="top" />
+        
         <View style={styles.heroSection}>
           <Text style={styles.heroIcon}>🚗</Text>
           <Text style={styles.title}>Start a Trip</Text>
@@ -158,27 +196,48 @@ const StartTripScreen = ({ navigation }) => {
             <Text style={styles.required}>*Required</Text>
           </View>
           <TextInput
-            style={styles.input}
-            placeholder="Enter address or coordinates (e.g., 12.95, 77.65)"
+            style={[
+              styles.input,
+              destCoords && styles.inputValid,
+              errors.destination && styles.inputError,
+            ]}
+            placeholder='Enter place name (e.g., "Avadi" or "Ayapakkam")'
             placeholderTextColor={COLORS.textMuted}
             value={destination}
-            onChangeText={setDestination}
+            onChangeText={handleDestinationChange}
           />
           
-          <TouchableOpacity
-            style={styles.searchButton}
-            onPress={handleSearchAddress}
-            disabled={geocoding || !destination.trim()}
-          >
-            {geocoding ? (
-              <ActivityIndicator size="small" color={COLORS.textInverse} />
-            ) : (
-              <>
-                <Text style={styles.searchButtonIcon}>🔍</Text>
-                <Text style={styles.searchButtonText}>Search Address</Text>
-              </>
-            )}
-          </TouchableOpacity>
+          {/* Show resolved address */}
+          {resolvedAddress && destCoords && (
+            <View style={styles.resolvedContainer}>
+              <Text style={styles.resolvedIcon}>✓</Text>
+              <Text style={styles.resolvedText} numberOfLines={2}>
+                {resolvedAddress}
+              </Text>
+            </View>
+          )}
+
+          {/* Search button - shows when text entered but not resolved */}
+          {destination.trim() && !destCoords && (
+            <TouchableOpacity
+              style={styles.searchButton}
+              onPress={handleSearchAddress}
+              disabled={geocoding}
+            >
+              {geocoding ? (
+                <ActivityIndicator size="small" color={COLORS.textInverse} />
+              ) : (
+                <>
+                  <Text style={styles.searchButtonIcon}>🔍</Text>
+                  <Text style={styles.searchButtonText}>Look Up Address</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
+
+          {errors.destination && (
+            <Text style={styles.errorText}>{errors.destination}</Text>
+          )}
 
           <View style={styles.inputHeader}>
             <Text style={styles.label}>Expected Time of Arrival (ETA)</Text>
@@ -223,12 +282,12 @@ const StartTripScreen = ({ navigation }) => {
         </View>
 
         <TouchableOpacity
-          style={[styles.button, loading && styles.buttonDisabled]}
+          style={[styles.button, (loading || geocoding) && styles.buttonDisabled]}
           onPress={handleStartTrip}
-          disabled={loading}
+          disabled={loading || geocoding}
           activeOpacity={0.8}
         >
-          {loading ? (
+          {loading || geocoding ? (
             <ActivityIndicator color={COLORS.textInverse} />
           ) : (
             <>
@@ -312,16 +371,49 @@ const styles = StyleSheet.create({
     padding: SPACING.md,
     fontSize: FONTS.base,
     color: COLORS.text,
+    minHeight: 48,
+  },
+  inputValid: {
+    borderColor: COLORS.success,
+    backgroundColor: '#F0FDF4',
+  },
+  inputError: {
+    borderColor: COLORS.danger,
+  },
+  errorText: {
+    fontSize: FONTS.xs,
+    color: COLORS.danger,
+    marginTop: SPACING.xs,
+  },
+  resolvedContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0FDF4',
+    padding: SPACING.sm,
+    borderRadius: RADIUS.base,
+    marginTop: SPACING.sm,
+  },
+  resolvedIcon: {
+    fontSize: 14,
+    color: COLORS.success,
+    marginRight: SPACING.sm,
+    fontWeight: FONTS.bold,
+  },
+  resolvedText: {
+    flex: 1,
+    fontSize: FONTS.sm,
+    color: COLORS.success,
   },
   searchButton: {
     backgroundColor: COLORS.info,
-    paddingVertical: SPACING.sm,
+    paddingVertical: SPACING.md,
     paddingHorizontal: SPACING.base,
     borderRadius: RADIUS.base,
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'center',
     marginTop: SPACING.sm,
+    minHeight: 48,
   },
   searchButtonIcon: {
     fontSize: 16,
@@ -329,7 +421,7 @@ const styles = StyleSheet.create({
   },
   searchButtonText: {
     color: COLORS.textInverse,
-    fontSize: FONTS.sm,
+    fontSize: FONTS.base,
     fontWeight: FONTS.medium,
   },
   etaContainer: {
@@ -385,6 +477,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     marginBottom: SPACING.base,
+    minHeight: 56,
     ...SHADOWS.base,
   },
   buttonDisabled: {
@@ -406,6 +499,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: SPACING.base,
+    minHeight: 48,
   },
   linkButtonText: {
     color: COLORS.accent,

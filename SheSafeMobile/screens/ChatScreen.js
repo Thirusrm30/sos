@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../utils/constants';
 import { getChatMessages, sendChatMessage, getUserId } from '../services/buddyService';
@@ -23,18 +24,24 @@ const ChatScreen = ({ navigation, route }) => {
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
   const socketRef = useRef(null);
   const flatListRef = useRef(null);
+  const isMountedRef = useRef(true);
 
   const currentUserId = getUserId();
 
   useEffect(() => {
+    isMountedRef.current = true;
+    
     loadMessages();
     connectSocket();
 
     return () => {
+      isMountedRef.current = false;
       if (socketRef.current) {
         socketRef.current.disconnect();
+        socketRef.current = null;
       }
     };
   }, [matchId]);
@@ -42,34 +49,58 @@ const ChatScreen = ({ navigation, route }) => {
   const loadMessages = async () => {
     try {
       const result = await getChatMessages(matchId);
-      if (result.success) {
-        setMessages(result.messages);
+      if (result.success && isMountedRef.current) {
+        setMessages(result.messages || []);
       }
     } catch (error) {
       console.error('Error loading messages:', error);
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
   };
 
   const connectSocket = () => {
-    socketRef.current = io(SOCKET_URL);
+    try {
+      socketRef.current = io(SOCKET_URL, {
+        timeout: 5000,
+        reconnectionAttempts: 3,
+      });
 
-    socketRef.current.on('connect', () => {
-      console.log('Socket connected');
-      socketRef.current.emit('joinChat', matchId);
-    });
+      socketRef.current.on('connect', () => {
+        console.log('Socket connected');
+        if (isMountedRef.current) {
+          setIsConnected(true);
+          socketRef.current?.emit('joinChat', matchId);
+        }
+      });
 
-    socketRef.current.on('newMessage', (message) => {
-      setMessages((prev) => [...prev, message]);
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 100);
-    });
+      socketRef.current.on('newMessage', (message) => {
+        if (isMountedRef.current) {
+          setMessages((prev) => [...prev, message]);
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }, 100);
+        }
+      });
 
-    socketRef.current.on('disconnect', () => {
-      console.log('Socket disconnected');
-    });
+      socketRef.current.on('disconnect', () => {
+        console.log('Socket disconnected');
+        if (isMountedRef.current) {
+          setIsConnected(false);
+        }
+      });
+
+      socketRef.current.on('connect_error', (error) => {
+        console.error('Socket connection error:', error);
+        if (isMountedRef.current) {
+          setIsConnected(false);
+        }
+      });
+    } catch (error) {
+      console.error('Error initializing socket:', error);
+    }
   };
 
   const handleSend = async () => {
@@ -86,7 +117,9 @@ const ChatScreen = ({ navigation, route }) => {
     } catch (error) {
       Alert.alert('Error', 'Failed to send message');
     } finally {
-      setSending(false);
+      if (isMountedRef.current) {
+        setSending(false);
+      }
     }
   };
 
@@ -106,6 +139,8 @@ const ChatScreen = ({ navigation, route }) => {
       </View>
     );
   };
+
+  const keyExtractor = useCallback((item) => item.id || item._id || Math.random().toString(), []);
 
   return (
     <KeyboardAvoidingView
@@ -128,16 +163,20 @@ const ChatScreen = ({ navigation, route }) => {
       <FlatList
         ref={flatListRef}
         data={messages}
-        keyExtractor={(item) => item.id || item._id}
+        keyExtractor={keyExtractor}
         renderItem={renderMessage}
         contentContainerStyle={styles.messagesList}
         onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
         ListEmptyComponent={
-          !loading && (
+          !loading ? (
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyIcon}>💬</Text>
               <Text style={styles.emptyText}>No messages yet</Text>
               <Text style={styles.emptySubtext}>Start a conversation with your buddy!</Text>
+            </View>
+          ) : (
+            <View style={styles.emptyContainer}>
+              <ActivityIndicator size="large" color={COLORS.accent} />
             </View>
           )
         }

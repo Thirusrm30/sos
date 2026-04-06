@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -18,25 +18,40 @@ const LoginScreen = ({ onLogin }) => {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState({});
+
+  const validateForm = useCallback(() => {
+    const newErrors = {};
+    
+    if (!name.trim()) {
+      newErrors.name = 'Name is required';
+    } else if (name.trim().length < 2) {
+      newErrors.name = 'Name must be at least 2 characters';
+    }
+    
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  }, [name]);
 
   const handleLogin = async () => {
-    if (!name.trim()) {
-      Alert.alert('Required', 'Please enter your name');
+    if (!validateForm()) {
       return;
     }
 
     setLoading(true);
+    setErrors({});
+    
     try {
       const result = await login(name.trim(), phone.trim());
       
       if (result.success) {
         onLogin(result.user);
       } else {
-        Alert.alert('Error', result.message || 'Login failed. Please try again.');
+        Alert.alert('Login Failed', result.message || 'Please try again.');
       }
     } catch (error) {
       console.error('Login error:', error);
-      Alert.alert('Error', 'Something went wrong. Please try again.');
+      Alert.alert('Error', 'Something went wrong. Please check your internet connection and try again.');
     } finally {
       setLoading(false);
     }
@@ -66,14 +81,22 @@ const LoginScreen = ({ onLogin }) => {
           <View style={styles.inputContainer}>
             <Text style={styles.label}>Name *</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, errors.name && styles.inputError]}
               placeholder="Enter your name"
               placeholderTextColor={COLORS.textMuted}
               value={name}
-              onChangeText={setName}
+              onChangeText={(text) => {
+                setName(text);
+                if (errors.name) {
+                  setErrors({ ...errors, name: null });
+                }
+              }}
               autoCapitalize="words"
               autoCorrect={false}
             />
+            {errors.name && (
+              <Text style={styles.errorText}>{errors.name}</Text>
+            )}
           </View>
 
           <View style={styles.inputContainer}>
@@ -188,6 +211,14 @@ const styles = StyleSheet.create({
     padding: SPACING.md,
     fontSize: FONTS.base,
     color: COLORS.text,
+  },
+  inputError: {
+    borderColor: COLORS.danger,
+  },
+  errorText: {
+    color: COLORS.danger,
+    fontSize: FONTS.xs,
+    marginTop: SPACING.xs,
   },
   button: {
     backgroundColor: COLORS.primary,

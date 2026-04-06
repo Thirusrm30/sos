@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   TextInput,
@@ -7,7 +7,6 @@ import {
   Text,
   StyleSheet,
   ActivityIndicator,
-  Modal,
 } from 'react-native';
 import { searchPlaces, getPlaceDetails } from '../services/placesService';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../utils/constants';
@@ -25,73 +24,104 @@ const AddressSearch = ({
   const [predictions, setPredictions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const [selectedPlace, setSelectedPlace] = useState(null);
+  const debounceTimerRef = useRef(null);
+  const mountedRef = useRef(true);
 
-  const debounce = (func, wait) => {
-    let timeout;
-    return (...args) => {
-      clearTimeout(timeout);
-      timeout = setTimeout(() => func.apply(this, args), wait);
-    };
-  };
-
-  const handleInputChange = useCallback(
-    debounce(async (text) => {
-      setInputValue(text);
-      onChangeText?.(text);
-
-      if (text.length < 3) {
-        setPredictions([]);
-        setShowSuggestions(false);
-        return;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
       }
+    };
+  }, []);
 
-      setLoading(true);
+  // Sync external value changes
+  useEffect(() => {
+    if (value !== undefined && value !== inputValue) {
+      setInputValue(value);
+    }
+  }, [value]);
+
+  const searchAddress = useCallback(async (text) => {
+    if (!mountedRef.current) return;
+    if (text.length < 3) {
+      setPredictions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    setLoading(true);
+    try {
       const result = await searchPlaces(text);
-      setLoading(false);
-
-      if (result.success) {
+      if (mountedRef.current && result.success) {
         setPredictions(result.predictions);
         setShowSuggestions(result.predictions.length > 0);
       }
-    }, 300),
-    []
-  );
+    } catch (error) {
+      console.log('Place search error:', error);
+    } finally {
+      if (mountedRef.current) setLoading(false);
+    }
+  }, []);
 
-  const handleSelectPrediction = async (prediction) => {
+  // Handle input change with proper debounce
+  const handleInputChange = useCallback((text) => {
+    // Update input value IMMEDIATELY - no debounce on the text display
+    setInputValue(text);
+    onChangeText?.(text);
+
+    // Debounce only the API search
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    debounceTimerRef.current = setTimeout(() => {
+      searchAddress(text);
+    }, 400);
+  }, [onChangeText, searchAddress]);
+
+  const handleSelectPrediction = useCallback(async (prediction) => {
     setLoading(true);
     setShowSuggestions(false);
 
-    const detailsResult = await getPlaceDetails(prediction.place_id);
-    setLoading(false);
+    try {
+      const detailsResult = await getPlaceDetails(prediction.place_id);
 
-    if (detailsResult.success) {
-      const place = detailsResult.data;
-      setSelectedPlace(place);
-      setInputValue(place.address);
-      onChangeText?.(place.address);
-      onSelect?.({
-        lat: place.lat,
-        lng: place.lng,
-        address: place.address,
-        name: place.name,
-        placeId: place.placeId,
-        components: place.components,
-      });
-    } else {
-      setInputValue(prediction.description);
-      onChangeText?.(prediction.description);
+      if (detailsResult.success && mountedRef.current) {
+        const place = detailsResult.data;
+        setInputValue(place.address);
+        onChangeText?.(place.address);
+        onSelect?.({
+          lat: place.lat,
+          lng: place.lng,
+          address: place.address,
+          name: place.name,
+          placeId: place.placeId,
+          components: place.components,
+        });
+      } else if (mountedRef.current) {
+        setInputValue(prediction.description);
+        onChangeText?.(prediction.description);
+      }
+    } catch (error) {
+      console.log('Place details error:', error);
+      if (mountedRef.current) {
+        setInputValue(prediction.description);
+        onChangeText?.(prediction.description);
+      }
+    } finally {
+      if (mountedRef.current) setLoading(false);
     }
-  };
+  }, [onChangeText, onSelect]);
 
-  const handleClear = () => {
+  const handleClear = useCallback(() => {
     setInputValue('');
     setPredictions([]);
-    setSelectedPlace(null);
     setShowSuggestions(false);
     onChangeText?.('');
     onClear?.();
-  };
+  }, [onChangeText, onClear]);
 
   return (
     <View style={[styles.container, style]}>
@@ -103,6 +133,7 @@ const AddressSearch = ({
           value={inputValue}
           onChangeText={handleInputChange}
           onFocus={() => predictions.length > 0 && setShowSuggestions(true)}
+          autoCorrect={false}
         />
         {loading && (
           <ActivityIndicator
@@ -125,10 +156,12 @@ const AddressSearch = ({
             keyExtractor={(item) => item.place_id}
             keyboardShouldPersistTaps="handled"
             nestedScrollEnabled
+            scrollEnabled={predictions.length > 3}
             renderItem={({ item }) => (
               <TouchableOpacity
                 style={styles.predictionItem}
                 onPress={() => handleSelectPrediction(item)}
+                activeOpacity={0.7}
               >
                 <Text style={styles.predictionIcon}>📍</Text>
                 <View style={styles.predictionTextContainer}>
@@ -151,7 +184,7 @@ const AddressSearch = ({
 const styles = StyleSheet.create({
   container: {
     position: 'relative',
-    zIndex: 1,
+    zIndex: 10,
   },
   inputContainer: {
     flexDirection: 'row',
@@ -160,6 +193,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     borderRadius: RADIUS.base,
+    minHeight: 48,
   },
   input: {
     flex: 1,
@@ -173,6 +207,10 @@ const styles = StyleSheet.create({
   clearButton: {
     padding: SPACING.sm,
     marginRight: SPACING.sm,
+    minWidth: 32,
+    minHeight: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   clearText: {
     fontSize: 16,
@@ -186,9 +224,10 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.surface,
     borderRadius: RADIUS.base,
     marginTop: 4,
-    maxHeight: 200,
-    ...SHADOWS.md,
+    maxHeight: 220,
+    ...SHADOWS.lg,
     zIndex: 1000,
+    elevation: 10,
   },
   predictionItem: {
     flexDirection: 'row',
@@ -196,6 +235,7 @@ const styles = StyleSheet.create({
     padding: SPACING.md,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.borderLight,
+    minHeight: 48,
   },
   predictionIcon: {
     fontSize: 16,

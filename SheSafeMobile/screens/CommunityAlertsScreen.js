@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
+  InteractionManager,
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Picker } from '@react-native-picker/picker';
@@ -24,11 +25,21 @@ const INCIDENT_TYPES = [
   { key: 'Other', label: 'Other', color: COLORS.incidentOther },
 ];
 
+// Default region (India center) so map shows immediately
+const DEFAULT_REGION = {
+  latitude: 13.0827,
+  longitude: 80.2707,
+  latitudeDelta: 0.1,
+  longitudeDelta: 0.1,
+};
+
 const CommunityAlertsScreen = () => {
   const mapRef = useRef(null);
+  const mountedRef = useRef(true);
   const [userLocation, setUserLocation] = useState(null);
   const [alerts, setAlerts] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false); // Start false so UI shows instantly
+  const [mapReady, setMapReady] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState(null);
   const [incidentType, setIncidentType] = useState('Harassment');
@@ -37,45 +48,80 @@ const CommunityAlertsScreen = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [upvoting, setUpvoting] = useState(null);
+  const [alertsLoading, setAlertsLoading] = useState(true);
 
   useEffect(() => {
-    fetchInitialData();
+    mountedRef.current = true;
+    
+    // Show screen immediately, fetch data in background
+    fetchDataInBackground();
+    
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
-  const fetchInitialData = async () => {
-    try {
-      const location = await getCurrentLocation();
-      if (location) {
-        setUserLocation(location);
-      }
-      await fetchAlerts();
-    } catch (error) {
-      console.error('Error fetching initial data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const fetchDataInBackground = useCallback(async () => {
+    // Fetch alerts and location in parallel - non-blocking
+    const [alertsPromise, locationPromise] = [
+      fetchAlerts(),
+      getCurrentLocation().catch(() => null),
+    ];
 
-  const fetchAlerts = async () => {
+    const location = await locationPromise;
+    if (location && mountedRef.current) {
+      setUserLocation(location);
+      // Animate map to user location after it's ready
+      if (mapRef.current) {
+        mapRef.current.animateToRegion({
+          latitude: location.lat,
+          longitude: location.lng,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
+        }, 500);
+      }
+    }
+
+    await alertsPromise;
+  }, []);
+
+  const fetchAlerts = useCallback(async () => {
     try {
+      setAlertsLoading(true);
       const result = await getAllAlerts();
-      if (result.success) {
-        setAlerts(result.alerts);
+      if (result.success && mountedRef.current) {
+        setAlerts(result.alerts || []);
       }
     } catch (error) {
       console.error('Error fetching alerts:', error);
     } finally {
-      setRefreshing(false);
+      if (mountedRef.current) {
+        setAlertsLoading(false);
+        setRefreshing(false);
+      }
     }
-  };
+  }, []);
 
-  const handleMapPress = (event) => {
+  const handleMapReady = useCallback(() => {
+    setMapReady(true);
+    // If we already have user location, animate to it
+    if (userLocation && mapRef.current) {
+      mapRef.current.animateToRegion({
+        latitude: userLocation.lat,
+        longitude: userLocation.lng,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      }, 300);
+    }
+  }, [userLocation]);
+
+  const handleMapPress = useCallback((event) => {
     const { coordinate } = event.nativeEvent;
     setSelectedLocation(coordinate);
     setModalVisible(true);
-  };
+  }, []);
 
-  const handleSubmitAlert = async () => {
+  const handleSubmitAlert = useCallback(async () => {
     if (!selectedLocation) {
       Alert.alert('Error', 'Please select a location on the map');
       return;
@@ -83,6 +129,11 @@ const CommunityAlertsScreen = () => {
 
     if (!description.trim()) {
       Alert.alert('Error', 'Please enter a description');
+      return;
+    }
+
+    if (description.trim().length < 10) {
+      Alert.alert('Error', 'Description must be at least 10 characters');
       return;
     }
 
@@ -102,7 +153,7 @@ const CommunityAlertsScreen = () => {
         setSelectedLocation(null);
         setDescription('');
         setIncidentType('Harassment');
-        await fetchAlerts();
+        fetchAlerts(); // Refresh in background
       } else {
         Alert.alert('Error', result.message);
       }
@@ -110,11 +161,11 @@ const CommunityAlertsScreen = () => {
       console.error('Error submitting alert:', error);
       Alert.alert('Error', 'Failed to report incident');
     } finally {
-      setSubmitting(false);
+      if (mountedRef.current) setSubmitting(false);
     }
-  };
+  }, [selectedLocation, description, incidentType, fetchAlerts]);
 
-  const handleUpvote = async (alert) => {
+  const handleUpvote = useCallback(async (alert) => {
     Alert.alert(
       'Confirm Alert',
       `Confirm this ${alert.type} alert?`,
@@ -128,43 +179,45 @@ const CommunityAlertsScreen = () => {
               const result = await upvoteAlert(alert._id);
               if (result.success) {
                 Alert.alert('✅ Confirmed!', 'Alert has been confirmed');
-                await fetchAlerts();
+                fetchAlerts(); // Refresh in background
               } else {
                 Alert.alert('Error', result.message);
               }
             } catch (error) {
               Alert.alert('Error', 'Failed to confirm');
             } finally {
-              setUpvoting(null);
+              if (mountedRef.current) setUpvoting(null);
             }
           },
         },
       ]
     );
-  };
+  }, [fetchAlerts]);
 
-  const onRefresh = () => {
+  const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchAlerts();
-  };
+  }, [fetchAlerts]);
 
-  const getMarkerColor = (type) => {
+  const centerOnUserLocation = useCallback(() => {
+    if (userLocation && mapRef.current) {
+      mapRef.current.animateToRegion({
+        latitude: userLocation.lat,
+        longitude: userLocation.lng,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      }, 300);
+    }
+  }, [userLocation]);
+
+  const getMarkerColor = useCallback((type) => {
     return INCIDENT_COLORS[type] || COLORS.incidentOther;
-  };
+  }, []);
 
-  const getIncidentLabel = (key) => {
+  const getIncidentLabel = useCallback((key) => {
     const type = INCIDENT_TYPES.find(t => t.key === key);
     return type?.label || key;
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
-        <Text style={styles.loadingText}>Loading map...</Text>
-      </View>
-    );
-  }
+  }, []);
 
   const initialRegion = userLocation
     ? {
@@ -173,12 +226,7 @@ const CommunityAlertsScreen = () => {
         latitudeDelta: 0.05,
         longitudeDelta: 0.05,
       }
-    : {
-        latitude: 20.5937,
-        longitude: 78.9629,
-        latitudeDelta: 10,
-        longitudeDelta: 10,
-      };
+    : DEFAULT_REGION;
 
   return (
     <View style={styles.container}>
@@ -187,8 +235,11 @@ const CommunityAlertsScreen = () => {
         style={styles.map}
         initialRegion={initialRegion}
         onPress={handleMapPress}
+        onMapReady={handleMapReady}
         showsUserLocation={true}
         showsMyLocationButton={true}
+        loadingEnabled={true}
+        loadingIndicatorColor={COLORS.accent}
       >
         {alerts.map((alert) => (
           <Marker
@@ -208,6 +259,22 @@ const CommunityAlertsScreen = () => {
           </Marker>
         ))}
       </MapView>
+
+      {/* Loading overlay for alerts */}
+      {alertsLoading && (
+        <View style={styles.alertsLoadingOverlay}>
+          <ActivityIndicator size="small" color={COLORS.accent} />
+          <Text style={styles.alertsLoadingText}>Loading alerts...</Text>
+        </View>
+      )}
+
+      <TouchableOpacity 
+        style={styles.locationButton} 
+        onPress={centerOnUserLocation}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.locationButtonText}>📍</Text>
+      </TouchableOpacity>
 
       <View style={styles.legendCard}>
         <Text style={styles.legendTitle}>Legend</Text>
@@ -243,6 +310,7 @@ const CommunityAlertsScreen = () => {
         </Text>
       </View>
 
+      {/* Report Modal */}
       <Modal
         animationType="slide"
         transparent={true}
@@ -316,6 +384,7 @@ const CommunityAlertsScreen = () => {
         </View>
       </Modal>
 
+      {/* Alert Detail Modal */}
       <Modal
         animationType="fade"
         transparent={true}
@@ -394,6 +463,38 @@ const styles = StyleSheet.create({
   map: {
     flex: 1,
   },
+  alertsLoadingOverlay: {
+    position: 'absolute',
+    top: 60,
+    alignSelf: 'center',
+    backgroundColor: COLORS.surface,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.full,
+    ...SHADOWS.md,
+  },
+  alertsLoadingText: {
+    fontSize: FONTS.sm,
+    color: COLORS.textSecondary,
+    marginLeft: SPACING.sm,
+  },
+  locationButton: {
+    position: 'absolute',
+    bottom: 100,
+    right: SPACING.md,
+    backgroundColor: COLORS.surface,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...SHADOWS.md,
+  },
+  locationButtonText: {
+    fontSize: 22,
+  },
   marker: {
     width: 32,
     height: 32,
@@ -467,6 +568,10 @@ const styles = StyleSheet.create({
   },
   refreshButton: {
     padding: SPACING.xs,
+    minWidth: 32,
+    minHeight: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   refreshButtonText: {
     fontSize: 18,
@@ -555,6 +660,8 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.base,
     backgroundColor: COLORS.surfaceSecondary,
     alignItems: 'center',
+    minHeight: 48,
+    justifyContent: 'center',
   },
   cancelButtonText: {
     color: COLORS.textSecondary,
@@ -567,6 +674,8 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.base,
     backgroundColor: COLORS.danger,
     alignItems: 'center',
+    minHeight: 48,
+    justifyContent: 'center',
   },
   buttonDisabled: {
     backgroundColor: COLORS.textMuted,
@@ -617,6 +726,8 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.base,
     alignItems: 'center',
     marginBottom: SPACING.base,
+    minHeight: 48,
+    justifyContent: 'center',
   },
   confirmButtonText: {
     color: COLORS.textInverse,
@@ -628,6 +739,8 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.base,
     backgroundColor: COLORS.surfaceSecondary,
     alignItems: 'center',
+    minHeight: 48,
+    justifyContent: 'center',
   },
   closeButtonText: {
     color: COLORS.textSecondary,

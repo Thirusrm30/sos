@@ -8,6 +8,8 @@ import {
   Alert,
   Vibration,
   Animated,
+  Easing,
+  InteractionManager,
 } from 'react-native';
 import SOSButton from '../components/SOSButton';
 import QuickFakeCallButton from '../components/QuickFakeCallButton';
@@ -33,90 +35,150 @@ const SOSScreen = () => {
   const countdownIntervalRef = useRef(null);
   const locationUpdateIntervalRef = useRef(null);
   const fadeAnim = useRef(new Animated.Value(1)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
   const unsubscribeNetRef = useRef(null);
+  const locationRef = useRef(null);
+  const mountedRef = useRef(true);
+  const messageTimerRef = useRef(null);
 
   const checkPendingSOS = useCallback(async () => {
-    const count = await getUnsyncedSOSCount();
-    setPendingCount(count);
+    try {
+      const count = await getUnsyncedSOSCount();
+      if (mountedRef.current) setPendingCount(count);
+    } catch (error) {
+      console.log('Error checking pending SOS:', error);
+    }
   }, []);
 
   const syncPendingSOS = useCallback(async () => {
-    const { isConnected } = await getNetworkState();
-    if (!isConnected) return;
+    try {
+      const { isConnected } = await getNetworkState();
+      if (!isConnected) return;
 
-    const pending = await getPendingSOSEvents();
-    const unsynced = pending.filter(e => !e.synced);
+      const pending = await getPendingSOSEvents();
+      const unsynced = pending.filter(e => !e.synced);
 
-    for (const event of unsynced) {
-      try {
-        const result = await sendSOSAlert(event.lat, event.lng);
-        if (result.success) {
-          await markSOSAsSynced(event.id);
-          console.log('Synced pending SOS:', event.id);
+      for (const event of unsynced) {
+        try {
+          const result = await sendSOSAlert(event.lat, event.lng);
+          if (result.success) {
+            await markSOSAsSynced(event.id);
+          }
+        } catch (error) {
+          console.error('Error syncing pending SOS:', error);
         }
-      } catch (error) {
-        console.error('Error syncing pending SOS:', error);
       }
+      
+      await clearSyncedSOSEvents();
+      await checkPendingSOS();
+    } catch (error) {
+      console.error('Error in syncPendingSOS:', error);
     }
-    
-    await clearSyncedSOSEvents();
-    await checkPendingSOS();
   }, [checkPendingSOS]);
 
+  // Network initialization - run once
   useEffect(() => {
+    mountedRef.current = true;
+    let isOfflineLocal = false;
+
     const initNetwork = async () => {
-      const state = await getNetworkState();
-      setIsOffline(!state.isConnected);
-      await checkPendingSOS();
+      try {
+        const state = await getNetworkState();
+        if (mountedRef.current) {
+          isOfflineLocal = !state.isConnected;
+          setIsOffline(!state.isConnected);
+          await checkPendingSOS();
+        }
+      } catch (error) {
+        console.error('Network init error:', error);
+      }
     };
+    
     initNetwork();
 
     unsubscribeNetRef.current = subscribeToNetworkState((state) => {
-      const wasOffline = isOffline;
+      if (!mountedRef.current) return;
+      const wasOffline = isOfflineLocal;
+      isOfflineLocal = !state.isConnected;
       setIsOffline(!state.isConnected);
       
+      // Sync when coming back online
       if (wasOffline && state.isConnected) {
         syncPendingSOS();
       }
     });
 
     return () => {
+      mountedRef.current = false;
       if (unsubscribeNetRef.current) {
         unsubscribeNetRef.current();
       }
     };
-  }, [isOffline, checkPendingSOS, syncPendingSOS]);
+  }, []); // Empty deps - run once
 
-  const fetchLocation = async () => {
+  // Pulse animation
+  useEffect(() => {
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.1,
+          duration: 800,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 800,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    pulse.start();
+
+    return () => pulse.stop();
+  }, []);
+
+  const fetchLocation = useCallback(async () => {
     try {
       const pos = await getCurrentLocation();
-      if (pos) {
+      if (pos && mountedRef.current) {
         setLocation(pos);
+        locationRef.current = pos;
         setLocationError(null);
-      } else {
+      } else if (mountedRef.current) {
         setLocationError('Unable to get location. Please enable GPS.');
       }
     } catch (error) {
-      setLocationError('Error getting location');
+      if (mountedRef.current) {
+        setLocationError('Error getting location');
+      }
       console.error('Location error:', error);
     }
-  };
+  }, []);
 
-  const triggerSOS = async (lat, lng) => {
+  useEffect(() => {
+    fetchLocation();
+  }, [fetchLocation]);
+
+  const triggerSOS = useCallback(async (lat, lng) => {
+    if (!mountedRef.current) return;
+    setLoading(true);
+    setMessage('Sending SOS alert...');
+    
     try {
-      setLoading(true);
-      
       const networkState = await getNetworkState();
       const isConnected = networkState.isConnected && networkState.isInternetReachable;
 
       if (isConnected) {
-        setMessage('Sending SOS alert...');
         const result = await sendSOSAlert(lat, lng);
 
         if (result.success) {
-          setMessage('SOS Alert sent successfully!');
-          setSosActive(true);
-          startLocationUpdates();
+          if (mountedRef.current) {
+            setMessage('SOS Alert sent successfully!');
+            setSosActive(true);
+            startLocationUpdates();
+          }
         } else {
           await handleOfflineSOS(lat, lng);
         }
@@ -127,27 +189,39 @@ const SOSScreen = () => {
       console.error('SOS Error:', error);
       await handleOfflineSOS(lat, lng);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
-  };
+  }, []);
 
-  const handleOfflineSOS = async (lat, lng) => {
+  const handleOfflineSOS = useCallback(async (lat, lng) => {
+    if (!mountedRef.current) return;
     setMessage('Offline mode: Sending SMS...');
     
-    const smsResult = await sendSOSViaSMS(lat, lng);
-    
-    if (smsResult.success) {
-      await storePendingSOS(lat, lng);
-      setMessage('Offline mode: SMS sent without live tracking');
-      setSosActive(true);
-      startOfflineLocationUpdates();
-    } else {
-      setMessage('Failed to send SOS. No network or SMS unavailable.');
-      Alert.alert('SOS Failed', 'Could not send SOS alert. Please try again or use a phone to call emergency services.');
+    try {
+      const smsResult = await sendSOSViaSMS(lat, lng);
+      
+      if (smsResult.success) {
+        await storePendingSOS(lat, lng);
+        if (mountedRef.current) {
+          setMessage('Offline mode: SMS sent without live tracking');
+          setSosActive(true);
+          startOfflineLocationUpdates();
+        }
+      } else {
+        if (mountedRef.current) {
+          setMessage('Failed to send SOS. No network or SMS unavailable.');
+          Alert.alert('SOS Failed', 'Could not send SOS alert. Please try again or use a phone to call emergency services.');
+        }
+      }
+    } catch (error) {
+      console.error('Offline SOS error:', error);
+      if (mountedRef.current) {
+        setMessage('Failed to send SOS. Please try again.');
+      }
     }
-  };
+  }, []);
 
-  const startLocationUpdates = () => {
+  const startLocationUpdates = useCallback(() => {
     if (locationUpdateIntervalRef.current) {
       clearInterval(locationUpdateIntervalRef.current);
     }
@@ -158,20 +232,22 @@ const SOSScreen = () => {
         if (pos) {
           const networkState = await getNetworkState();
           if (networkState.isConnected) {
-            await triggerSOS(pos.lat, pos.lng);
+            await sendSOSAlert(pos.lat, pos.lng);
           } else {
-            stopLocationUpdates();
-            setSosActive(false);
-            setMessage('Network lost - SMS mode stopped. Tap to retry.');
+            if (mountedRef.current) {
+              stopLocationUpdates();
+              setSosActive(false);
+              setMessage('Network lost - SMS mode stopped. Tap to retry.');
+            }
           }
         }
       } catch (error) {
         console.error('Location update error:', error);
       }
     }, LOCATION_UPDATE_INTERVAL);
-  };
+  }, []);
 
-  const startOfflineLocationUpdates = () => {
+  const startOfflineLocationUpdates = useCallback(() => {
     if (locationUpdateIntervalRef.current) {
       clearInterval(locationUpdateIntervalRef.current);
     }
@@ -182,74 +258,86 @@ const SOSScreen = () => {
         if (pos) {
           await sendSOSViaSMS(pos.lat, pos.lng);
           await storePendingSOS(pos.lat, pos.lng);
-          setMessage('Offline mode: SMS sent without live tracking');
+          if (mountedRef.current) {
+            setMessage('Offline mode: SMS sent without live tracking');
+          }
         }
       } catch (error) {
         console.error('Offline location update error:', error);
       }
     }, LOCATION_UPDATE_INTERVAL);
-  };
+  }, []);
 
-  const stopLocationUpdates = () => {
+  const stopLocationUpdates = useCallback(() => {
     if (locationUpdateIntervalRef.current) {
       clearInterval(locationUpdateIntervalRef.current);
       locationUpdateIntervalRef.current = null;
     }
     setSosActive(false);
     setMessage('');
-  };
+  }, []);
 
-  const handleSOSPress = () => {
+  // ===== KEY FIX: SOS press triggers countdown INSTANTLY =====
+  const handleSOSPress = useCallback(() => {
+    // Haptic feedback immediately
     Vibration.vibrate(200);
 
     if (sosActive) {
       stopLocationUpdates();
       setSosStatus('idle');
       setMessage('SOS cancelled');
-      setTimeout(() => setMessage(''), 3000);
+      if (messageTimerRef.current) clearTimeout(messageTimerRef.current);
+      messageTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) {
+          setMessage('');
+          setCountdown(COUNTDOWN_SECONDS);
+        }
+      }, 3000);
       return;
     }
 
+    // START COUNTDOWN IMMEDIATELY - don't wait for location
     setSosStatus('countdown');
     setCountdown(COUNTDOWN_SECONDS);
+    setMessage('');
 
+    // Fetch location in parallel (non-blocking)
     getCurrentLocation()
       .then((pos) => {
-        countdownIntervalRef.current = setInterval(() => {
-          setCountdown((prev) => {
-            if (prev <= 1) {
-              clearInterval(countdownIntervalRef.current);
-              countdownIntervalRef.current = null;
-              setSosStatus('sending');
-              if (pos) {
-                triggerSOS(pos.lat, pos.lng);
-              } else {
-                triggerSOS(0, 0);
-              }
-              return 0;
-            }
-            return prev - 1;
-          });
-        }, 1000);
+        if (pos && mountedRef.current) {
+          locationRef.current = pos;
+        }
       })
       .catch(() => {
-        setSosStatus('countdown');
-        countdownIntervalRef.current = setInterval(() => {
-          setCountdown((prev) => {
-            if (prev <= 1) {
-              clearInterval(countdownIntervalRef.current);
-              countdownIntervalRef.current = null;
-              setSosStatus('sending');
-              triggerSOS(0, 0);
-              return 0;
-            }
-            return prev - 1;
-          });
-        }, 1000);
+        // Location fetch failed - will use last known or (0,0)
       });
-  };
 
-  const handleCancel = () => {
+    // Start countdown timer immediately - no waiting
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+    }
+    
+    countdownIntervalRef.current = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(countdownIntervalRef.current);
+          countdownIntervalRef.current = null;
+          setSosStatus('sending');
+          
+          const loc = locationRef.current;
+          if (loc) {
+            triggerSOS(loc.lat, loc.lng);
+          } else {
+            triggerSOS(0, 0);
+          }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }, [sosActive, stopLocationUpdates, triggerSOS]);
+
+  const handleCancel = useCallback(() => {
     if (countdownIntervalRef.current) {
       clearInterval(countdownIntervalRef.current);
       countdownIntervalRef.current = null;
@@ -257,22 +345,26 @@ const SOSScreen = () => {
     setSosStatus('idle');
     setCountdown(COUNTDOWN_SECONDS);
     setMessage('SOS cancelled');
-    setTimeout(() => setMessage(''), 3000);
-  };
+    if (messageTimerRef.current) clearTimeout(messageTimerRef.current);
+    messageTimerRef.current = setTimeout(() => {
+      if (mountedRef.current) setMessage('');
+    }, 3000);
+  }, []);
 
+  // Cleanup all timers on unmount
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
       if (countdownIntervalRef.current) {
         clearInterval(countdownIntervalRef.current);
       }
       if (locationUpdateIntervalRef.current) {
         clearInterval(locationUpdateIntervalRef.current);
       }
+      if (messageTimerRef.current) {
+        clearTimeout(messageTimerRef.current);
+      }
     };
-  }, []);
-
-  useEffect(() => {
-    fetchLocation();
   }, []);
 
   const getStatusMessage = () => {
@@ -305,6 +397,7 @@ const SOSScreen = () => {
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.background} />
       
       <View style={styles.content}>
+        {/* Header - properly aligned */}
         <View style={styles.header}>
           <Text style={styles.title}>SheSafe</Text>
           <Text style={styles.subtitle}>Women's Safety App</Text>
@@ -312,25 +405,30 @@ const SOSScreen = () => {
 
         {getNetworkIndicator()}
 
-        <Animated.View style={[styles.statusContainer, { opacity: fadeAnim }]}>
+        {/* Status section - fixed height to prevent layout jump */}
+        <View style={styles.statusContainer}>
           <View style={styles.statusSection}>
             {sosStatus === 'idle' && !sosActive && (
               <Text style={styles.statusText}>{getStatusMessage()}</Text>
             )}
 
             {sosStatus === 'countdown' && (
-              <View style={styles.countdownSection}>
-                <Text style={styles.countdownLabel}>Sending alert in</Text>
-                <Text style={styles.countdownNumber}>{countdown}</Text>
-                <Text style={styles.countdownHint}>Tap CANCEL to stop</Text>
-              </View>
+              <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+                <View style={styles.countdownSection}>
+                  <Text style={styles.countdownLabel}>Sending alert in</Text>
+                  <Text style={styles.countdownNumber}>{countdown}</Text>
+                  <Text style={styles.countdownHint}>Tap CANCEL to stop</Text>
+                </View>
+              </Animated.View>
             )}
 
             {(sosStatus === 'sending' || loading) && (
               <View style={styles.sendingSection}>
-                <View style={styles.sendingSpinner}>
+                <Animated.View 
+                  style={[styles.sendingSpinner, { transform: [{ scale: pulseAnim }] }]}
+                >
                   <Text style={styles.sendingIcon}>{isOffline ? '📵' : '📡'}</Text>
-                </View>
+                </Animated.View>
                 <Text style={styles.sendingText}>
                   {isOffline ? 'Sending via SMS...' : 'Sending SOS Alert...'}
                 </Text>
@@ -338,7 +436,7 @@ const SOSScreen = () => {
             )}
 
             {sosActive && sosStatus !== 'sending' && (
-              <View style={[styles.activeSection, isOffline && styles.activeSectionOffline]}>
+              <Animated.View style={[styles.activeSection, isOffline && styles.activeSectionOffline, { transform: [{ scale: pulseAnim }] }]}>
                 <View style={[styles.activeBadge, isOffline && styles.activeBadgeOffline]}>
                   <Text style={styles.activeBadgeIcon}>{isOffline ? '📱' : '✓'}</Text>
                 </View>
@@ -351,7 +449,7 @@ const SOSScreen = () => {
                     : 'Location updates every 60 seconds'
                   }
                 </Text>
-              </View>
+              </Animated.View>
             )}
 
             {message && !sosActive && (
@@ -368,8 +466,9 @@ const SOSScreen = () => {
               </View>
             )}
           </View>
-        </Animated.View>
+        </View>
 
+        {/* SOS Button - centered */}
         <View style={styles.buttonSection}>
           {sosStatus === 'countdown' ? (
             <SOSButton
@@ -383,11 +482,14 @@ const SOSScreen = () => {
               isActive={sosActive}
             />
           )}
+          
+          {/* Quick actions - properly aligned below SOS button */}
           <View style={styles.quickActionsRow}>
-            <QuickFakeCallButton />
+            <QuickFakeCallButton style={styles.quickCallBtn} />
           </View>
         </View>
 
+        {/* Location display at bottom */}
         <LocationDisplay
           location={location}
           error={locationError}
@@ -396,8 +498,9 @@ const SOSScreen = () => {
         />
       </View>
 
+      {/* Footer - properly aligned */}
       <View style={styles.footer}>
-        <Text style={styles.footerText}>Stay Safe - SheSafe</Text>
+        <Text style={styles.footerText}>Stay Safe — SheSafe</Text>
       </View>
     </SafeAreaView>
   );
@@ -410,23 +513,26 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-    padding: SPACING.lg,
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.base,
     alignItems: 'center',
   },
   header: {
     alignItems: 'center',
-    marginBottom: SPACING.xl,
-    marginTop: SPACING.base,
+    marginBottom: SPACING.lg,
+    width: '100%',
   },
   title: {
     fontSize: FONTS['3xl'],
     fontWeight: FONTS.bold,
     color: COLORS.text,
+    textAlign: 'center',
   },
   subtitle: {
     fontSize: FONTS.base,
     color: COLORS.textSecondary,
     marginTop: SPACING.xs,
+    textAlign: 'center',
   },
   offlineIndicator: {
     flexDirection: 'row',
@@ -436,6 +542,7 @@ const styles = StyleSheet.create({
     paddingVertical: SPACING.sm,
     borderRadius: RADIUS.md,
     marginBottom: SPACING.md,
+    alignSelf: 'center',
   },
   offlineIcon: {
     fontSize: 16,
@@ -450,12 +557,13 @@ const styles = StyleSheet.create({
     minHeight: 140,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: SPACING.lg,
+    marginBottom: SPACING.base,
     width: '100%',
   },
   statusSection: {
     alignItems: 'center',
     justifyContent: 'center',
+    width: '100%',
   },
   statusText: {
     fontSize: FONTS.lg,
@@ -464,38 +572,40 @@ const styles = StyleSheet.create({
   },
   countdownSection: {
     alignItems: 'center',
+    padding: SPACING.md,
   },
   countdownLabel: {
     fontSize: FONTS.lg,
     fontWeight: FONTS.medium,
     color: COLORS.danger,
-    marginBottom: SPACING.sm,
+    marginBottom: SPACING.xs,
   },
   countdownNumber: {
-    fontSize: 80,
+    fontSize: 96,
     fontWeight: FONTS.extrabold,
     color: COLORS.danger,
-    lineHeight: 90,
+    lineHeight: 100,
   },
   countdownHint: {
     fontSize: FONTS.md,
     color: COLORS.textMuted,
-    marginTop: SPACING.sm,
+    marginTop: SPACING.xs,
   },
   sendingSection: {
     alignItems: 'center',
+    padding: SPACING.md,
   },
   sendingSpinner: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     backgroundColor: COLORS.surfaceSecondary,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: SPACING.base,
   },
   sendingIcon: {
-    fontSize: 28,
+    fontSize: 36,
   },
   sendingText: {
     fontSize: FONTS.lg,
@@ -505,28 +615,28 @@ const styles = StyleSheet.create({
   activeSection: {
     alignItems: 'center',
     backgroundColor: '#DCFCE7',
-    padding: SPACING.lg,
+    padding: SPACING.xl,
     borderRadius: RADIUS.lg,
     width: '100%',
-    maxWidth: 280,
+    maxWidth: 300,
   },
   activeSectionOffline: {
     backgroundColor: '#FEF3C7',
   },
   activeBadge: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     backgroundColor: COLORS.success,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: SPACING.sm,
+    marginBottom: SPACING.md,
   },
   activeBadgeOffline: {
     backgroundColor: '#F59E0B',
   },
   activeBadgeIcon: {
-    fontSize: 24,
+    fontSize: 28,
     color: COLORS.textInverse,
   },
   activeTitle: {
@@ -566,22 +676,31 @@ const styles = StyleSheet.create({
     fontWeight: FONTS.medium,
   },
   buttonSection: {
-    marginVertical: SPACING.xl,
+    marginVertical: SPACING.lg,
     alignItems: 'center',
+    width: '100%',
   },
   quickActionsRow: {
-    marginTop: SPACING.lg,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: SPACING.base,
+    marginTop: SPACING.xl,
+    alignItems: 'center',
+    width: '100%',
+  },
+  quickCallBtn: {
+    minWidth: 180,
+    paddingVertical: 14,
+    paddingHorizontal: 28,
   },
   footer: {
-    padding: SPACING.base,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.lg,
     alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
   },
   footerText: {
     fontSize: FONTS.sm,
     color: COLORS.textMuted,
+    fontWeight: FONTS.medium,
   },
 });
 

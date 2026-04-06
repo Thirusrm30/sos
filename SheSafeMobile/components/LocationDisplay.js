@@ -1,8 +1,35 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { COLORS, FONTS, RADIUS, SPACING, SHADOWS } from '../utils/constants';
+import { reverseGeocode } from '../services/geocodingService';
 
 const LocationDisplay = ({ location, error, onRefresh, loading }) => {
+  const [address, setAddress] = useState(null);
+  const [loadingAddress, setLoadingAddress] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  // Try to reverse geocode when location changes
+  useEffect(() => {
+    if (location && location.lat && location.lng) {
+      setLoadingAddress(true);
+      reverseGeocode(location.lat, location.lng)
+        .then(result => {
+          if (result.success && mountedRef.current) {
+            setAddress(result.data.formattedAddress);
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (mountedRef.current) setLoadingAddress(false);
+        });
+    }
+  }, [location?.lat, location?.lng]);
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -12,6 +39,7 @@ const LocationDisplay = ({ location, error, onRefresh, loading }) => {
             onPress={onRefresh} 
             style={styles.refreshButton}
             disabled={loading}
+            activeOpacity={0.7}
           >
             {loading ? (
               <ActivityIndicator size="small" color={COLORS.accent} />
@@ -28,15 +56,30 @@ const LocationDisplay = ({ location, error, onRefresh, loading }) => {
           <Text style={styles.errorText}>{error}</Text>
         </View>
       ) : location ? (
-        <View style={styles.locationContainer}>
-          <View style={styles.coordBox}>
-            <Text style={styles.coordLabel}>Latitude</Text>
-            <Text style={styles.coordValue}>{location.lat.toFixed(6)}</Text>
-          </View>
-          <View style={styles.divider} />
-          <View style={styles.coordBox}>
-            <Text style={styles.coordLabel}>Longitude</Text>
-            <Text style={styles.coordValue}>{location.lng.toFixed(6)}</Text>
+        <View>
+          {/* Address display */}
+          {address && (
+            <View style={styles.addressContainer}>
+              <Text style={styles.addressText} numberOfLines={2}>{address}</Text>
+            </View>
+          )}
+          {loadingAddress && !address && (
+            <View style={styles.addressLoadingContainer}>
+              <ActivityIndicator size="small" color={COLORS.textMuted} />
+              <Text style={styles.addressLoadingText}>Getting address...</Text>
+            </View>
+          )}
+          {/* Coordinates */}
+          <View style={styles.locationContainer}>
+            <View style={styles.coordBox}>
+              <Text style={styles.coordLabel}>Latitude</Text>
+              <Text style={styles.coordValue}>{location.lat.toFixed(6)}</Text>
+            </View>
+            <View style={styles.divider} />
+            <View style={styles.coordBox}>
+              <Text style={styles.coordLabel}>Longitude</Text>
+              <Text style={styles.coordValue}>{location.lng.toFixed(6)}</Text>
+            </View>
           </View>
         </View>
       ) : (
@@ -54,16 +97,16 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.surface,
     borderRadius: RADIUS.md,
     padding: SPACING.base,
-    marginTop: SPACING.lg,
+    marginTop: SPACING.base,
     width: '100%',
-    maxWidth: 350,
+    maxWidth: 380,
     ...SHADOWS.base,
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: SPACING.base,
+    marginBottom: SPACING.sm,
   },
   title: {
     fontSize: FONTS.base,
@@ -72,17 +115,43 @@ const styles = StyleSheet.create({
   },
   refreshButton: {
     padding: SPACING.xs,
+    minWidth: 32,
+    minHeight: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   refreshText: {
     fontSize: FONTS.sm,
     color: COLORS.accent,
     fontWeight: FONTS.medium,
   },
+  addressContainer: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: RADIUS.base,
+    padding: SPACING.sm,
+    marginBottom: SPACING.sm,
+  },
+  addressText: {
+    fontSize: FONTS.sm,
+    color: COLORS.info,
+    fontWeight: FONTS.medium,
+    lineHeight: 18,
+  },
+  addressLoadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: SPACING.sm,
+  },
+  addressLoadingText: {
+    fontSize: FONTS.xs,
+    color: COLORS.textMuted,
+    marginLeft: SPACING.xs,
+  },
   locationContainer: {
     flexDirection: 'row',
     backgroundColor: COLORS.surfaceSecondary,
     borderRadius: RADIUS.base,
-    padding: SPACING.base,
+    padding: SPACING.sm,
   },
   coordBox: {
     flex: 1,
@@ -90,10 +159,10 @@ const styles = StyleSheet.create({
   coordLabel: {
     fontSize: FONTS.xs,
     color: COLORS.textSecondary,
-    marginBottom: 4,
+    marginBottom: 2,
   },
   coordValue: {
-    fontSize: FONTS.md,
+    fontSize: FONTS.sm,
     fontWeight: FONTS.semibold,
     color: COLORS.text,
     fontFamily: 'monospace',
@@ -101,7 +170,7 @@ const styles = StyleSheet.create({
   divider: {
     width: 1,
     backgroundColor: COLORS.border,
-    marginHorizontal: SPACING.md,
+    marginHorizontal: SPACING.sm,
   },
   errorContainer: {
     flexDirection: 'row',

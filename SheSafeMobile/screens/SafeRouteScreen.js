@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,8 @@ import {
   Alert,
   ActivityIndicator,
   Dimensions,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import MapView, { Polyline, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS, getSafetyColor, getSafetyLabel } from '../utils/constants';
@@ -20,6 +22,7 @@ const { width } = Dimensions.get('window');
 
 const SafeRouteScreen = ({ navigation }) => {
   const mapRef = useRef(null);
+  const mountedRef = useRef(true);
   const [origin, setOrigin] = useState('');
   const [destination, setDestination] = useState('');
   const [loading, setLoading] = useState(false);
@@ -28,62 +31,54 @@ const SafeRouteScreen = ({ navigation }) => {
   const [selectedRoute, setSelectedRoute] = useState('fastest');
   const [originCoords, setOriginCoords] = useState(null);
   const [destinationCoords, setDestinationCoords] = useState(null);
+  const [gettingLocation, setGettingLocation] = useState(false);
 
   useEffect(() => {
+    mountedRef.current = true;
     getCurrentLoc();
+    return () => { mountedRef.current = false; };
   }, []);
 
-  const getCurrentLoc = async () => {
+  const getCurrentLoc = useCallback(async () => {
+    setGettingLocation(true);
     try {
       const location = await getCurrentLocation();
-      if (location) {
+      if (location && mountedRef.current) {
         setCurrentLocation(location);
         setOriginCoords({ lat: location.lat, lng: location.lng });
+        setOrigin('Current Location');
       }
     } catch (error) {
       console.error('Error getting location:', error);
+    } finally {
+      if (mountedRef.current) setGettingLocation(false);
     }
-  };
+  }, []);
 
-  const handleUseCurrentLocation = () => {
+  const handleUseCurrentLocation = useCallback(() => {
     if (currentLocation) {
       setOriginCoords({ lat: currentLocation.lat, lng: currentLocation.lng });
       setOrigin('Current Location');
+    } else {
+      getCurrentLoc();
     }
-  };
+  }, [currentLocation, getCurrentLoc]);
 
-  const handleOriginSelect = (data) => {
+  const handleOriginSelect = useCallback((data) => {
     if (data && data.lat && data.lng) {
       setOriginCoords({ lat: data.lat, lng: data.lng });
       setOrigin(data.address || data.name || 'Selected Location');
     }
-  };
+  }, []);
 
-  const handleDestinationSelect = (data) => {
+  const handleDestinationSelect = useCallback((data) => {
     if (data && data.lat && data.lng) {
       setDestinationCoords({ lat: data.lat, lng: data.lng });
       setDestination(data.address || data.name || 'Selected Location');
     }
-  };
+  }, []);
 
-  const parseCoordinates = (input) => {
-    if (!input) return null;
-    
-    const trimmed = input.trim();
-    
-    const commaMatch = trimmed.match(/^(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)$/);
-    if (commaMatch) {
-      const lat = parseFloat(commaMatch[1]);
-      const lng = parseFloat(commaMatch[2]);
-      if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-        return { lat, lng };
-      }
-    }
-    
-    return null;
-  };
-
-  const handleFindRoutes = async () => {
+  const handleFindRoutes = useCallback(async () => {
     if (!destination.trim() && !destinationCoords) {
       Alert.alert('Required', 'Please enter a destination');
       return;
@@ -95,7 +90,7 @@ const SafeRouteScreen = ({ navigation }) => {
     }
 
     if (!destinationCoords) {
-      Alert.alert('Error', 'Please geocode the destination first by tapping "Search"');
+      Alert.alert('Error', 'Please select a destination from the suggestions or tap a suggestion to set it.');
       return;
     }
 
@@ -107,40 +102,46 @@ const SafeRouteScreen = ({ navigation }) => {
 
       const result = await suggestRoutes(finalOrigin, destinationCoords);
 
-      if (result.success) {
+      if (result.success && mountedRef.current) {
         setRoutes(result);
         
-        if (mapRef.current && result.fastest.points.length > 0) {
-          mapRef.current.fitToCoordinates(
-            result.fastest.points,
-            {
-              edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
-              animated: true,
-            }
-          );
-        }
-      } else {
+        // Fit map to route after a short delay to let the map render
+        setTimeout(() => {
+          if (mapRef.current && result.fastest.points.length > 0) {
+            mapRef.current.fitToCoordinates(
+              result.fastest.points,
+              {
+                edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+                animated: true,
+              }
+            );
+          }
+        }, 100);
+      } else if (mountedRef.current) {
         Alert.alert('Error', result.message || 'Failed to get routes');
       }
     } catch (error) {
       console.error('Error finding routes:', error);
-      Alert.alert('Error', 'Failed to find routes. Please try again.');
+      if (mountedRef.current) {
+        Alert.alert('Error', 'Failed to find routes. Please try again.');
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
-  };
+  }, [destination, destinationCoords, originCoords, currentLocation]);
 
-  const getActiveRoutePoints = () => {
+  const getActiveRoutePoints = useCallback(() => {
     if (!routes) return [];
     return selectedRoute === 'fastest' ? routes.fastest.points : routes.safest.points;
-  };
+  }, [routes, selectedRoute]);
 
-  const renderRouteCard = (routeType, routeData, isSelected) => {
+  const renderRouteCard = useCallback((routeType, routeData, isSelected) => {
     const safetyColor = getSafetyColor(routeData.safetyScore);
     const safetyLabel = getSafetyLabel(routeData.safetyScore);
 
     return (
       <TouchableOpacity
+        key={routeType}
         style={[styles.routeCard, isSelected && styles.routeCardSelected]}
         onPress={() => setSelectedRoute(routeType)}
         activeOpacity={0.8}
@@ -202,11 +203,19 @@ const SafeRouteScreen = ({ navigation }) => {
         )}
       </TouchableOpacity>
     );
-  };
+  }, []);
 
   return (
-    <View style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView 
+        style={styles.scrollView} 
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
+      >
         <View style={styles.content}>
           <View style={styles.heroSection}>
             <Text style={styles.heroIcon}>🗺️</Text>
@@ -222,6 +231,9 @@ const SafeRouteScreen = ({ navigation }) => {
               {originCoords && (
                 <Text style={styles.coordsValid}>✓ Location set</Text>
               )}
+              {gettingLocation && (
+                <ActivityIndicator size="small" color={COLORS.accent} />
+              )}
             </View>
             <View style={styles.inputRow}>
               <AddressSearch
@@ -234,6 +246,7 @@ const SafeRouteScreen = ({ navigation }) => {
               <TouchableOpacity
                 style={styles.locationButton}
                 onPress={handleUseCurrentLocation}
+                activeOpacity={0.7}
               >
                 <Text style={styles.locationButtonText}>📍</Text>
               </TouchableOpacity>
@@ -263,7 +276,12 @@ const SafeRouteScreen = ({ navigation }) => {
             activeOpacity={0.8}
           >
             {loading ? (
-              <ActivityIndicator color={COLORS.textInverse} />
+              <View style={styles.loadingRow}>
+                <ActivityIndicator color={COLORS.textInverse} />
+                <Text style={[styles.buttonText, { marginLeft: SPACING.sm }]}>
+                  Finding routes...
+                </Text>
+              </View>
             ) : (
               <>
                 <Text style={styles.buttonIcon}>🛡️</Text>
@@ -347,7 +365,7 @@ const SafeRouteScreen = ({ navigation }) => {
           </View>
         </View>
       )}
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -387,6 +405,7 @@ const styles = StyleSheet.create({
     padding: SPACING.lg,
     marginBottom: SPACING.base,
     ...SHADOWS.base,
+    zIndex: 10,
   },
   inputHeader: {
     marginBottom: SPACING.sm,
@@ -404,29 +423,10 @@ const styles = StyleSheet.create({
     color: COLORS.success,
     fontWeight: FONTS.medium,
   },
-  input: {
-    backgroundColor: COLORS.surfaceSecondary,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: RADIUS.base,
-    padding: SPACING.md,
-    fontSize: FONTS.base,
-    marginBottom: SPACING.sm,
-    color: COLORS.text,
-  },
-  inputValid: {
-    borderColor: COLORS.success,
-    backgroundColor: '#F0FDF4',
-  },
-  formattedAddress: {
-    fontSize: FONTS.xs,
-    color: COLORS.textSecondary,
-    marginTop: -SPACING.xs,
-    marginBottom: SPACING.base,
-  },
   inputRow: {
     flexDirection: 'row',
     gap: SPACING.sm,
+    zIndex: 20,
   },
   locationButton: {
     backgroundColor: COLORS.accent,
@@ -435,22 +435,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     minWidth: 52,
+    minHeight: 48,
   },
   locationButtonText: {
     fontSize: 20,
   },
-  searchButton: {
-    backgroundColor: COLORS.info,
-    paddingVertical: SPACING.sm,
-    paddingHorizontal: SPACING.base,
-    borderRadius: RADIUS.base,
+  loadingRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: SPACING.xs,
-  },
-  searchButtonText: {
-    color: COLORS.textInverse,
-    fontSize: FONTS.sm,
-    fontWeight: FONTS.medium,
   },
   button: {
     backgroundColor: COLORS.accent,
@@ -460,6 +452,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     marginBottom: SPACING.lg,
+    minHeight: 56,
     ...SHADOWS.base,
   },
   buttonDisabled: {
