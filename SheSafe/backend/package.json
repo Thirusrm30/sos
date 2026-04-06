@@ -1,0 +1,23 @@
+{
+  "name": "shesafe-backend",
+  "version": "1.0.0",
+  "description": "SheSafe SOS Backend Server",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "start-all": "concurrently \"mongod --dbpath C:\\Users\\p thiruselvan\\OneDrive\\Documents\\RIT\\SheSafe\\backend\\data --bind_ip 127.0.0.1\" \"node server.js\"",
+    "mongodb": "mongod --dbpath C:\\Users\\p thiruselvan\\OneDrive\\Documents\\RIT\\SheSafe\\backend\\data --bind_ip 127.0.0.1"
+  },
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "concurrently": "^9.2.1",
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.1",
+    "express": "^4.18.2",
+    "mongoose": "^9.4.1",
+    "node-fetch": "^2.7.0",
+    "socket.io": "^4.8.3",
+    "uuid": "^13.0.0"
+  }
+}

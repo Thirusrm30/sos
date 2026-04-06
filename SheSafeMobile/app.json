@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "SheSafe",
+    "slug": "shesafe",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.yourcompany.shesafe",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "SheSafe needs your location to send emergency alerts to your contacts.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "SheSafe needs background location access to continuously update your location during emergencies.",
+        "UIBackgroundModes": ["location", "fetch"]
+      }
+    },
+    "android": {
+      "package": "com.yourcompany.shesafe",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "VIBRATE",
+        "INTERNET",
+        "ACCESS_NETWORK_STATE"
+      ]
+    },
+    "web": {},
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow SheSafe to use your location to send emergency alerts."
+        }
+      ]
+    ]
+  }
+}

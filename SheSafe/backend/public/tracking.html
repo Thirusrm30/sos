@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SheSafe - Live Tracking</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .header h1 {
+            color: #667eea;
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .status-active {
+            background: #dcfce7;
+            color: #16a34a;
+        }
+
+        .status-safe {
+            background: #dbeafe;
+            color: #2563eb;
+        }
+
+        .status-alert {
+            background: #fee2e2;
+            color: #dc2626;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .map-container {
+            flex: 1;
+            position: relative;
+        }
+
+        #map {
+            height: 100%;
+            width: 100%;
+        }
+
+        .info-panel {
+            background: white;
+            padding: 20px;
+            border-radius: 16px;
+            box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.1);
+            margin: 16px;
+            max-height: 40vh;
+            overflow-y: auto;
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .info-row:last-child {
+            border-bottom: none;
+        }
+
+        .info-label {
+            color: #6b7280;
+            font-size: 14px;
+        }
+
+        .info-value {
+            color: #1f2937;
+            font-weight: 600;
+            font-size: 14px;
+            text-align: right;
+        }
+
+        .last-update {
+            text-align: center;
+            padding: 12px;
+            background: #f3f4f6;
+            color: #6b7280;
+            font-size: 12px;
+        }
+
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background: white;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #e5e7eb;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .error {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .error-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        .error h2 {
+            color: #dc2626;
+            margin-bottom: 8px;
+        }
+
+        .error p {
+            color: #6b7280;
+        }
+
+        .marker-icon {
+            background: #dc2626;
+            border: 3px solid white;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .destination-marker {
+            background: #22c55e;
+            border: 3px solid white;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .origin-marker {
+            background: #3b82f6;
+            border: 3px solid white;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="loading">
+            <div class="spinner"></div>
+        </div>
+    </div>
+
+    <script>
+        // Extract trip ID from URL
+        const pathParts = window.location.pathname.split('/');
+        const tripId = pathParts[pathParts.length - 1];
+
+        // Global variables
+        let map;
+        let currentMarker;
+        let originMarker;
+        let destinationMarker;
+        let routePolyline;
+
+        // Initialize the app
+        async function init() {
+            try {
+                const response = await fetch(`/api/track/${tripId}`);
+                const data = await response.json();
+
+                if (!data.success) {
+                    showError(data.message || 'Trip not found');
+                    return;
+                }
+
+                const trip = data.trip;
+                renderTrip(trip);
+
+            } catch (error) {
+                console.error('Error loading trip:', error);
+                showError('Failed to load trip data. Please try again.');
+            }
+        }
+
+        function renderTrip(trip) {
+            const app = document.getElementById('app');
+            const statusClass = getStatusClass(trip.status, trip.isMarkedSafe);
+            const statusText = getStatusText(trip.status, trip.isMarkedSafe);
+
+            app.innerHTML = `
+                <div class="header">
+                    <h1>🛡️ SheSafe Live Tracking</h1>
+                    <span class="status-badge ${statusClass}">${statusText}</span>
+                </div>
+                
+                <div class="map-container">
+                    <div id="map"></div>
+                </div>
+
+                <div class="info-panel">
+                    <div class="info-row">
+                        <span class="info-label">Trip ID</span>
+                        <span class="info-value">${trip.tripId.substring(0, 8)}...</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Started</span>
+                        <span class="info-value">${formatTime(trip.startedAt)}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Expected Arrival</span>
+                        <span class="info-value">${formatTime(trip.eta)}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Destination</span>
+                        <span class="info-value">${trip.destination?.address || 'Not specified'}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Current Location</span>
+                        <span class="info-value">${trip.currentLocation ? 
+                            `${trip.currentLocation.lat.toFixed(6)}, ${trip.currentLocation.lng.toFixed(6)}` : 
+                            'Loading...'}</span>
+                    </div>
+                </div>
+
+                <div class="last-update">
+                    🔄 Auto-updating every 5 seconds | Last update: <span id="lastUpdate">--</span>
+                </div>
+            `;
+
+            // Initialize map
+            initializeMap(trip);
+        }
+
+        function initializeMap(trip) {
+            // Default center (India)
+            let centerLat = 20.5937;
+            let centerLng = 78.9629;
+
+            if (trip.currentLocation) {
+                centerLat = trip.currentLocation.lat;
+                centerLng = trip.currentLocation.lng;
+            } else if (trip.origin) {
+                centerLat = trip.origin.lat;
+                centerLng = trip.origin.lng;
+            }
+
+            // Create map
+            map = L.map('map').setView([centerLat, centerLng], 15);
+
+            // Add OpenStreetMap tiles
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            // Add origin marker (blue)
+            if (trip.origin) {
+                originMarker = L.marker([trip.origin.lat, trip.origin.lng], {
+                    icon: createCustomIcon('origin')
+                }).addTo(map);
+                originMarker.bindPopup('<b>🚗 Origin</b><br>Starting point');
+            }
+
+            // Add destination marker (green)
+            if (trip.destination && trip.destination.lat && trip.destination.lng) {
+                destinationMarker = L.marker([trip.destination.lat, trip.destination.lng], {
+                    icon: createCustomIcon('destination')
+                }).addTo(map);
+                destinationMarker.bindPopup('<b>🏁 Destination</b><br>End point');
+            }
+
+            // Add current location marker (red)
+            if (trip.currentLocation) {
+                currentMarker = L.marker([trip.currentLocation.lat, trip.currentLocation.lng], {
+                    icon: createCustomIcon('current')
+                }).addTo(map);
+                currentMarker.bindPopup('<b>📍 Current Location</b><br>Live tracking');
+            }
+
+            // Draw route if available
+            if (trip.route && trip.route.length > 0) {
+                const routeCoords = trip.route.map(point => [point.lat, point.lng]);
+                routePolyline = L.polyline(routeCoords, {
+                    color: '#667eea',
+                    weight: 4,
+                    opacity: 0.8
+                }).addTo(map);
+
+                // Fit map to route
+                map.fitBounds(routePolyline.getBounds(), { padding: [50, 50] });
+            }
+        }
+
+        function createCustomIcon(type) {
+            let color;
+            if (type === 'current') color = '#dc2626';
+            else if (type === 'destination') color = '#22c55e';
+            else color = '#3b82f6';
+
+            return L.divIcon({
+                className: 'custom-marker',
+                html: `<div style="
+                    background: ${color};
+                    border: 3px solid white;
+                    border-radius: 50%;
+                    width: 24px;
+                    height: 24px;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+                "></div>`,
+                iconSize: [24, 24],
+                iconAnchor: [12, 12]
+            });
+        }
+
+        // Update location on map
+        async function updateLocation() {
+            try {
+                const response = await fetch(`/api/track/${tripId}`);
+                const data = await response.json();
+
+                if (!data.success) {
+                    console.error('Failed to fetch update:', data.message);
+                    return;
+                }
+
+                const trip = data.trip;
+                updateMapLocation(trip);
+                updateLastUpdateTime();
+
+            } catch (error) {
+                console.error('Error updating location:', error);
+            }
+        }
+
+        function updateMapLocation(trip) {
+            if (!map || !trip.currentLocation) return;
+
+            const newLatLng = [trip.currentLocation.lat, trip.currentLocation.lng];
+
+            // Update or create current marker
+            if (currentMarker) {
+                currentMarker.setLatLng(newLatLng);
+            } else {
+                currentMarker = L.marker(newLatLng, {
+                    icon: createCustomIcon('current')
+                }).addTo(map);
+            }
+
+            // Add new point to route
+            if (trip.route && trip.route.length > 0) {
+                const routeCoords = trip.route.map(point => [point.lat, point.lng]);
+
+                if (routePolyline) {
+                    routePolyline.setLatLngs(routeCoords);
+                } else {
+                    routePolyline = L.polyline(routeCoords, {
+                        color: '#667eea',
+                        weight: 4,
+                        opacity: 0.8
+                    }).addTo(map);
+                }
+            }
+
+            // Update info panel
+            const locationElement = document.querySelector('.info-row:nth-child(5) .info-value');
+            if (locationElement) {
+                locationElement.textContent = `${trip.currentLocation.lat.toFixed(6)}, ${trip.currentLocation.lng.toFixed(6)}`;
+            }
+
+            // Update status badge if changed
+            const statusBadge = document.querySelector('.status-badge');
+            if (statusBadge) {
+                const statusClass = getStatusClass(trip.status, trip.isMarkedSafe);
+                const statusText = getStatusText(trip.status, trip.isMarkedSafe);
+                statusBadge.className = `status-badge ${statusClass}`;
+                statusBadge.textContent = statusText;
+            }
+        }
+
+        function updateLastUpdateTime() {
+            const lastUpdateElement = document.getElementById('lastUpdate');
+            if (lastUpdateElement) {
+                lastUpdateElement.textContent = new Date().toLocaleTimeString();
+            }
+        }
+
+        function getStatusClass(status, isMarkedSafe) {
+            if (isMarkedSafe) return 'status-safe';
+            if (status === 'alerted') return 'status-alert';
+            return 'status-active';
+        }
+
+        function getStatusText(status, isMarkedSafe) {
+            if (isMarkedSafe) return '✅ Marked Safe';
+            if (status === 'alerted') return '🚨 ALERT SENT';
+            return '🟢 Live Tracking';
+        }
+
+        function formatTime(dateString) {
+            if (!dateString) return 'N/A';
+            const date = new Date(dateString);
+            return date.toLocaleString('en-IN', {
+                day: '2-digit',
+                month: 'short',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function showError(message) {
+            const app = document.getElementById('app');
+            app.innerHTML = `
+                <div class="error">
+                    <div class="error-icon">⚠️</div>
+                    <h2>Trip Not Found</h2>
+                    <p>${message}</p>
+                    <p style="margin-top: 16px; font-size: 12px;">Trip ID: ${tripId}</p>
+                </div>
+            `;
+        }
+
+        // Start the app
+        init();
+
+        // Update location every 5 seconds
+        setInterval(updateLocation, 5000);
+    </script>
+</body>
+</html>
