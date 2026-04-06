@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -14,8 +14,13 @@ import {
 import { COLORS, LOCATION_UPDATE_INTERVAL, FONTS, SPACING, RADIUS, SHADOWS } from '../utils/constants';
 import { getCurrentLocation } from '../services/locationService';
 import { updateTripLocation, markTripSafe, getTripDetails } from '../services/tripService';
+import { confirmCheckIn, sendCheckInStatus } from '../services/checkInService';
+import { showCheckInNotification, requestNotificationPermissions, cancelCheckInReminders } from '../services/notificationService';
+import { sendSOSAlert } from '../services/apiService';
 
 const LOCATION_UPDATE_INTERVAL_MOBILE = 15000;
+const CHECKIN_INTERVAL = 30 * 60 * 1000;
+const MAX_MISSED_CHECKINS = 2;
 
 const ActiveTripScreen = ({ route, navigation }) => {
   const { tripId, trackingLink, destination } = route.params;
@@ -26,9 +31,16 @@ const ActiveTripScreen = ({ route, navigation }) => {
   const [eta, setEta] = useState(null);
   const [isMarkedSafe, setIsMarkedSafe] = useState(false);
   
+  const [lastCheckIn, setLastCheckIn] = useState(null);
+  const [missedCheckIns, setMissedCheckIns] = useState(0);
+  const [nextCheckInTime, setNextCheckInTime] = useState(null);
+  const [checkInEnabled, setCheckInEnabled] = useState(false);
+  
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const locationIntervalRef = useRef(null);
   const checkStatusIntervalRef = useRef(null);
+  const checkInTimerRef = useRef(null);
+  const nextCheckInTimerRef = useRef(null);
 
   useEffect(() => {
     const pulse = Animated.loop(
@@ -47,20 +59,98 @@ const ActiveTripScreen = ({ route, navigation }) => {
     );
     pulse.start();
 
+    initializeCheckIn();
     fetchAndUpdateLocation();
     locationIntervalRef.current = setInterval(fetchAndUpdateLocation, LOCATION_UPDATE_INTERVAL_MOBILE);
     checkStatusIntervalRef.current = setInterval(checkTripStatus, 60000);
     fetchTripDetails();
 
     return () => {
-      if (locationIntervalRef.current) {
-        clearInterval(locationIntervalRef.current);
-      }
-      if (checkStatusIntervalRef.current) {
-        clearInterval(checkStatusIntervalRef.current);
-      }
+      cleanupTimers();
     };
   }, []);
+
+  const cleanupTimers = () => {
+    if (locationIntervalRef.current) clearInterval(locationIntervalRef.current);
+    if (checkStatusIntervalRef.current) clearInterval(checkStatusIntervalRef.current);
+    if (checkInTimerRef.current) clearInterval(checkInTimerRef.current);
+    if (nextCheckInTimerRef.current) clearTimeout(nextCheckInTimerRef.current);
+  };
+
+  const initializeCheckIn = async () => {
+    const hasPermission = await requestNotificationPermissions();
+    if (hasPermission) {
+      setCheckInEnabled(true);
+      startCheckInTimer();
+    }
+  };
+
+  const startCheckInTimer = () => {
+    const scheduleNextCheckIn = () => {
+      setNextCheckInTime(Date.now() + CHECKIN_INTERVAL);
+      
+      if (nextCheckInTimerRef.current) clearTimeout(nextCheckInTimerRef.current);
+      nextCheckInTimerRef.current = setTimeout(() => {
+        handleMissedCheckIn();
+      }, CHECKIN_INTERVAL);
+    };
+
+    showCheckInNotification(tripId);
+    scheduleNextCheckIn();
+
+    if (checkInTimerRef.current) clearInterval(checkInTimerRef.current);
+    checkInTimerRef.current = setInterval(() => {
+      showCheckInNotification(tripId);
+      scheduleNextCheckIn();
+    }, CHECKIN_INTERVAL);
+  };
+
+  const handleCheckInConfirm = useCallback(async () => {
+    try {
+      setLastCheckIn(new Date());
+      setMissedCheckIns(0);
+      
+      await confirmCheckIn(tripId);
+      
+      Alert.alert(
+        '✅ Check-in Confirmed',
+        'You are safe. Next check-in in 30 minutes.',
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      console.error('Check-in confirm error:', error);
+    }
+  }, [tripId]);
+
+  const handleMissedCheckIn = useCallback(async () => {
+    const newMissedCount = missedCheckIns + 1;
+    setMissedCheckIns(newMissedCount);
+    
+    await sendCheckInStatus(tripId, 'missed', newMissedCount);
+    
+    if (newMissedCount >= MAX_MISSED_CHECKINS) {
+      Alert.alert(
+        '⚠️ Safety Alert',
+        'You have missed 2 check-ins. Sending SOS alert to your emergency contacts.',
+        [{ text: 'OK' }]
+      );
+      
+      if (currentLocation) {
+        await sendSOSAlert(currentLocation.lat, currentLocation.lng);
+      } else {
+        await sendSOSAlert(0, 0);
+      }
+      
+      cleanupTimers();
+      await cancelCheckInReminders();
+    } else {
+      Alert.alert(
+        '⏰ Check-in Missed',
+        `You missed 1 check-in. ${MAX_MISSED_CHECKINS - newMissedCount} more missed check-in(s) will trigger SOS.`,
+        [{ text: 'OK' }]
+      );
+    }
+  }, [tripId, missedCheckIns, currentLocation]);
 
   const fetchTripDetails = async () => {
     try {
@@ -107,7 +197,7 @@ const ActiveTripScreen = ({ route, navigation }) => {
     }
   };
 
-  const handleMarkSafe = () => {
+  const handleMarkSafe = async () => {
     Alert.alert(
       '🛡️ Mark as Safe',
       'Are you sure you want to end this trip and mark yourself as safe?',
@@ -118,6 +208,9 @@ const ActiveTripScreen = ({ route, navigation }) => {
           onPress: async () => {
             setLoading(true);
             try {
+              cleanupTimers();
+              await cancelCheckInReminders();
+              
               const result = await markTripSafe(tripId);
               if (result.success) {
                 Vibration.vibrate([0, 500, 200, 500]);
@@ -137,6 +230,17 @@ const ActiveTripScreen = ({ route, navigation }) => {
             }
           },
         },
+      ]
+    );
+  };
+
+  const handleManualCheckIn = () => {
+    Alert.alert(
+      '🔔 Confirm Safety',
+      'Tap to confirm you are safe.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'I\'m Safe', onPress: handleCheckInConfirm },
       ]
     );
   };
@@ -170,6 +274,21 @@ const ActiveTripScreen = ({ route, navigation }) => {
     return `${minutes} minutes remaining`;
   };
 
+  const getTimeUntilCheckIn = () => {
+    if (!nextCheckInTime) return '--';
+    const remaining = nextCheckInTime - Date.now();
+    if (remaining <= 0) return 'Now';
+    const minutes = Math.floor(remaining / 60000);
+    const seconds = Math.floor((remaining % 60000) / 1000);
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  const getCheckInStatusColor = () => {
+    if (missedCheckIns === 0) return COLORS.success;
+    if (missedCheckIns === 1) return COLORS.warning;
+    return COLORS.danger;
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.content}>
@@ -178,6 +297,52 @@ const ActiveTripScreen = ({ route, navigation }) => {
           <Text style={styles.title}>Trip Active</Text>
           <Text style={styles.destination}>To: {destination}</Text>
         </Animated.View>
+
+        <View style={styles.checkInCard}>
+          <View style={styles.checkInHeader}>
+            <Text style={styles.cardTitle}>🔔 Safe Check-in</Text>
+            {checkInEnabled && (
+              <TouchableOpacity onPress={handleManualCheckIn}>
+                <Text style={styles.checkInButton}>Check In Now</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          
+          {checkInEnabled ? (
+            <View style={styles.checkInContent}>
+              <View style={styles.checkInRow}>
+                <View style={styles.checkInItem}>
+                  <Text style={styles.checkInLabel}>Next check-in</Text>
+                  <Text style={styles.checkInValue}>{getTimeUntilCheckIn()}</Text>
+                </View>
+                <View style={styles.checkInItem}>
+                  <Text style={styles.checkInLabel}>Missed</Text>
+                  <Text style={[styles.checkInValue, { color: getCheckInStatusColor() }]}>
+                    {missedCheckIns} / {MAX_MISSED_CHECKINS}
+                  </Text>
+                </View>
+              </View>
+              
+              {lastCheckIn && (
+                <Text style={styles.lastCheckInText}>
+                  Last confirmed: {lastCheckIn.toLocaleTimeString()}
+                </Text>
+              )}
+              
+              {missedCheckIns > 0 && (
+                <View style={styles.warningBox}>
+                  <Text style={styles.warningText}>
+                    ⚠️ {missedCheckIns} check-in(s) missed. {MAX_MISSED_CHECKINS - missedCheckIns} more will trigger SOS!
+                  </Text>
+                </View>
+              )}
+            </View>
+          ) : (
+            <Text style={styles.checkInDisabled}>
+              Enable notifications to receive check-in reminders
+            </Text>
+          )}
+        </View>
 
         <View style={styles.statusCard}>
           <View style={styles.statusRow}>
@@ -249,7 +414,7 @@ const ActiveTripScreen = ({ route, navigation }) => {
 
         <View style={styles.infoBox}>
           <Text style={styles.infoText}>
-            ⚠️ If you don't mark safe within 10 minutes of ETA, an automatic alert will be sent to your emergency contacts.
+            ⚠️ If you don't check in or mark safe within 1 hour of ETA, an automatic alert will be sent.
           </Text>
         </View>
       </View>
@@ -286,6 +451,70 @@ const styles = StyleSheet.create({
   destination: {
     fontSize: FONTS.base,
     color: COLORS.textSecondary,
+    marginTop: SPACING.xs,
+  },
+  checkInCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    marginBottom: SPACING.base,
+    ...SHADOWS.base,
+  },
+  checkInHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.md,
+  },
+  cardTitle: {
+    fontSize: FONTS.base,
+    fontWeight: FONTS.semibold,
+    color: COLORS.text,
+  },
+  checkInButton: {
+    color: COLORS.accent,
+    fontSize: FONTS.sm,
+    fontWeight: FONTS.medium,
+  },
+  checkInContent: {},
+  checkInRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+  },
+  checkInItem: {
+    alignItems: 'center',
+  },
+  checkInLabel: {
+    fontSize: FONTS.xs,
+    color: COLORS.textMuted,
+    marginBottom: SPACING.xs,
+  },
+  checkInValue: {
+    fontSize: FONTS.xl,
+    fontWeight: FONTS.bold,
+    color: COLORS.text,
+  },
+  lastCheckInText: {
+    fontSize: FONTS.xs,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    marginTop: SPACING.sm,
+  },
+  warningBox: {
+    backgroundColor: '#FEF3C7',
+    padding: SPACING.sm,
+    borderRadius: RADIUS.base,
+    marginTop: SPACING.sm,
+  },
+  warningText: {
+    fontSize: FONTS.xs,
+    color: '#92400E',
+    textAlign: 'center',
+  },
+  checkInDisabled: {
+    fontSize: FONTS.sm,
+    color: COLORS.textMuted,
+    textAlign: 'center',
     marginTop: SPACING.xs,
   },
   statusCard: {
@@ -335,11 +564,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: SPACING.sm,
-  },
-  cardTitle: {
-    fontSize: FONTS.base,
-    fontWeight: FONTS.semibold,
-    color: COLORS.text,
   },
   mapButton: {
     padding: SPACING.xs,

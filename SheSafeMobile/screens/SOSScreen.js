@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   View, 
   Text, 
@@ -10,9 +10,13 @@ import {
   Animated,
 } from 'react-native';
 import SOSButton from '../components/SOSButton';
+import QuickFakeCallButton from '../components/QuickFakeCallButton';
 import LocationDisplay from '../components/LocationDisplay';
 import { getCurrentLocation } from '../services/locationService';
 import { sendSOSAlert } from '../services/apiService';
+import { getNetworkState, subscribeToNetworkState, isNetworkAvailable } from '../services/networkService';
+import { sendSOSViaSMS } from '../services/smsService';
+import { storePendingSOS, getUnsyncedSOSCount, clearSyncedSOSEvents, getPendingSOSEvents, markSOSAsSynced } from '../services/offlineSOSStorage';
 import { COLORS, COUNTDOWN_SECONDS, LOCATION_UPDATE_INTERVAL, FONTS, SPACING, RADIUS, SHADOWS } from '../utils/constants';
 
 const SOSScreen = () => {
@@ -23,10 +27,65 @@ const SOSScreen = () => {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [sosActive, setSosActive] = useState(false);
+  const [isOffline, setIsOffline] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
 
   const countdownIntervalRef = useRef(null);
   const locationUpdateIntervalRef = useRef(null);
   const fadeAnim = useRef(new Animated.Value(1)).current;
+  const unsubscribeNetRef = useRef(null);
+
+  const checkPendingSOS = useCallback(async () => {
+    const count = await getUnsyncedSOSCount();
+    setPendingCount(count);
+  }, []);
+
+  const syncPendingSOS = useCallback(async () => {
+    const { isConnected } = await getNetworkState();
+    if (!isConnected) return;
+
+    const pending = await getPendingSOSEvents();
+    const unsynced = pending.filter(e => !e.synced);
+
+    for (const event of unsynced) {
+      try {
+        const result = await sendSOSAlert(event.lat, event.lng);
+        if (result.success) {
+          await markSOSAsSynced(event.id);
+          console.log('Synced pending SOS:', event.id);
+        }
+      } catch (error) {
+        console.error('Error syncing pending SOS:', error);
+      }
+    }
+    
+    await clearSyncedSOSEvents();
+    await checkPendingSOS();
+  }, [checkPendingSOS]);
+
+  useEffect(() => {
+    const initNetwork = async () => {
+      const state = await getNetworkState();
+      setIsOffline(!state.isConnected);
+      await checkPendingSOS();
+    };
+    initNetwork();
+
+    unsubscribeNetRef.current = subscribeToNetworkState((state) => {
+      const wasOffline = isOffline;
+      setIsOffline(!state.isConnected);
+      
+      if (wasOffline && state.isConnected) {
+        syncPendingSOS();
+      }
+    });
+
+    return () => {
+      if (unsubscribeNetRef.current) {
+        unsubscribeNetRef.current();
+      }
+    };
+  }, [isOffline, checkPendingSOS, syncPendingSOS]);
 
   const fetchLocation = async () => {
     try {
@@ -46,26 +105,45 @@ const SOSScreen = () => {
   const triggerSOS = async (lat, lng) => {
     try {
       setLoading(true);
-      setMessage('Sending SOS alert...');
+      
+      const networkState = await getNetworkState();
+      const isConnected = networkState.isConnected && networkState.isInternetReachable;
 
-      const result = await sendSOSAlert(lat, lng);
+      if (isConnected) {
+        setMessage('Sending SOS alert...');
+        const result = await sendSOSAlert(lat, lng);
 
-      if (result.success) {
-        setMessage('SOS Alert sent successfully!');
-        setSosActive(true);
-        startLocationUpdates();
+        if (result.success) {
+          setMessage('SOS Alert sent successfully!');
+          setSosActive(true);
+          startLocationUpdates();
+        } else {
+          await handleOfflineSOS(lat, lng);
+        }
       } else {
-        setMessage(result.message || 'Failed to send SOS alert');
-        setSosActive(false);
-        Alert.alert('Error', result.message);
+        await handleOfflineSOS(lat, lng);
       }
     } catch (error) {
       console.error('SOS Error:', error);
-      setMessage('Error: Could not connect to server');
-      setSosActive(false);
-      Alert.alert('Connection Error', 'Cannot connect to server. Please check your internet connection.');
+      await handleOfflineSOS(lat, lng);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleOfflineSOS = async (lat, lng) => {
+    setMessage('Offline mode: Sending SMS...');
+    
+    const smsResult = await sendSOSViaSMS(lat, lng);
+    
+    if (smsResult.success) {
+      await storePendingSOS(lat, lng);
+      setMessage('Offline mode: SMS sent without live tracking');
+      setSosActive(true);
+      startOfflineLocationUpdates();
+    } else {
+      setMessage('Failed to send SOS. No network or SMS unavailable.');
+      Alert.alert('SOS Failed', 'Could not send SOS alert. Please try again or use a phone to call emergency services.');
     }
   };
 
@@ -78,10 +156,36 @@ const SOSScreen = () => {
       try {
         const pos = await getCurrentLocation();
         if (pos) {
-          await triggerSOS(pos.lat, pos.lng);
+          const networkState = await getNetworkState();
+          if (networkState.isConnected) {
+            await triggerSOS(pos.lat, pos.lng);
+          } else {
+            stopLocationUpdates();
+            setSosActive(false);
+            setMessage('Network lost - SMS mode stopped. Tap to retry.');
+          }
         }
       } catch (error) {
         console.error('Location update error:', error);
+      }
+    }, LOCATION_UPDATE_INTERVAL);
+  };
+
+  const startOfflineLocationUpdates = () => {
+    if (locationUpdateIntervalRef.current) {
+      clearInterval(locationUpdateIntervalRef.current);
+    }
+
+    locationUpdateIntervalRef.current = setInterval(async () => {
+      try {
+        const pos = await getCurrentLocation();
+        if (pos) {
+          await sendSOSViaSMS(pos.lat, pos.lng);
+          await storePendingSOS(pos.lat, pos.lng);
+          setMessage('Offline mode: SMS sent without live tracking');
+        }
+      } catch (error) {
+        console.error('Offline location update error:', error);
       }
     }, LOCATION_UPDATE_INTERVAL);
   };
@@ -184,15 +288,29 @@ const SOSScreen = () => {
     }
   };
 
+  const getNetworkIndicator = () => {
+    if (isOffline) {
+      return (
+        <View style={styles.offlineIndicator}>
+          <Text style={styles.offlineIcon}>📵</Text>
+          <Text style={styles.offlineText}>OFFLINE MODE</Text>
+        </View>
+      );
+    }
+    return null;
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.background} />
       
       <View style={styles.content}>
         <View style={styles.header}>
-          <Text style={styles.title}>🛡️ SheSafe</Text>
+          <Text style={styles.title}>SheSafe</Text>
           <Text style={styles.subtitle}>Women's Safety App</Text>
         </View>
+
+        {getNetworkIndicator()}
 
         <Animated.View style={[styles.statusContainer, { opacity: fadeAnim }]}>
           <View style={styles.statusSection}>
@@ -211,26 +329,43 @@ const SOSScreen = () => {
             {(sosStatus === 'sending' || loading) && (
               <View style={styles.sendingSection}>
                 <View style={styles.sendingSpinner}>
-                  <Text style={styles.sendingIcon}>📡</Text>
+                  <Text style={styles.sendingIcon}>{isOffline ? '📵' : '📡'}</Text>
                 </View>
-                <Text style={styles.sendingText}>Sending SOS Alert...</Text>
+                <Text style={styles.sendingText}>
+                  {isOffline ? 'Sending via SMS...' : 'Sending SOS Alert...'}
+                </Text>
               </View>
             )}
 
             {sosActive && sosStatus !== 'sending' && (
-              <View style={styles.activeSection}>
-                <View style={styles.activeBadge}>
-                  <Text style={styles.activeBadgeIcon}>✓</Text>
+              <View style={[styles.activeSection, isOffline && styles.activeSectionOffline]}>
+                <View style={[styles.activeBadge, isOffline && styles.activeBadgeOffline]}>
+                  <Text style={styles.activeBadgeIcon}>{isOffline ? '📱' : '✓'}</Text>
                 </View>
-                <Text style={styles.activeTitle}>SOS ACTIVE</Text>
+                <Text style={[styles.activeTitle, isOffline && styles.activeTitleOffline]}>
+                  SOS ACTIVE
+                </Text>
                 <Text style={styles.activeSubtext}>
-                  Location updates every 60 seconds
+                  {isOffline 
+                    ? 'SMS sent without live tracking'
+                    : 'Location updates every 60 seconds'
+                  }
                 </Text>
               </View>
             )}
 
             {message && !sosActive && (
-              <Text style={styles.messageText}>{message}</Text>
+              <Text style={[styles.messageText, isOffline && styles.messageTextOffline]}>
+                {message}
+              </Text>
+            )}
+
+            {pendingCount > 0 && isOffline && (
+              <View style={styles.pendingBadge}>
+                <Text style={styles.pendingText}>
+                  {pendingCount} pending sync
+                </Text>
+              </View>
             )}
           </View>
         </Animated.View>
@@ -248,6 +383,9 @@ const SOSScreen = () => {
               isActive={sosActive}
             />
           )}
+          <View style={styles.quickActionsRow}>
+            <QuickFakeCallButton />
+          </View>
         </View>
 
         <LocationDisplay
@@ -259,7 +397,7 @@ const SOSScreen = () => {
       </View>
 
       <View style={styles.footer}>
-        <Text style={styles.footerText}>Stay Safe • SheSafe</Text>
+        <Text style={styles.footerText}>Stay Safe - SheSafe</Text>
       </View>
     </SafeAreaView>
   );
@@ -289,6 +427,24 @@ const styles = StyleSheet.create({
     fontSize: FONTS.base,
     color: COLORS.textSecondary,
     marginTop: SPACING.xs,
+  },
+  offlineIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.md,
+    marginBottom: SPACING.md,
+  },
+  offlineIcon: {
+    fontSize: 16,
+    marginRight: SPACING.sm,
+  },
+  offlineText: {
+    fontSize: FONTS.sm,
+    fontWeight: FONTS.semibold,
+    color: '#92400E',
   },
   statusContainer: {
     minHeight: 140,
@@ -354,6 +510,9 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 280,
   },
+  activeSectionOffline: {
+    backgroundColor: '#FEF3C7',
+  },
   activeBadge: {
     width: 48,
     height: 48,
@@ -363,6 +522,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: SPACING.sm,
   },
+  activeBadgeOffline: {
+    backgroundColor: '#F59E0B',
+  },
   activeBadgeIcon: {
     fontSize: 24,
     color: COLORS.textInverse,
@@ -371,6 +533,9 @@ const styles = StyleSheet.create({
     fontSize: FONTS.xl,
     fontWeight: FONTS.bold,
     color: COLORS.success,
+  },
+  activeTitleOffline: {
+    color: '#92400E',
   },
   activeSubtext: {
     fontSize: FONTS.sm,
@@ -385,8 +550,30 @@ const styles = StyleSheet.create({
     marginTop: SPACING.base,
     textAlign: 'center',
   },
+  messageTextOffline: {
+    color: '#92400E',
+  },
+  pendingBadge: {
+    marginTop: SPACING.md,
+    backgroundColor: '#E0E7FF',
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.md,
+  },
+  pendingText: {
+    fontSize: FONTS.sm,
+    color: '#4338CA',
+    fontWeight: FONTS.medium,
+  },
   buttonSection: {
     marginVertical: SPACING.xl,
+    alignItems: 'center',
+  },
+  quickActionsRow: {
+    marginTop: SPACING.lg,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: SPACING.base,
   },
   footer: {
     padding: SPACING.base,

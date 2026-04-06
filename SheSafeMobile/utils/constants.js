@@ -5,6 +5,8 @@ export const API_URL = getApiUrl();
 // SOS Configuration
 export const COUNTDOWN_SECONDS = 5;
 export const LOCATION_UPDATE_INTERVAL = 60000;
+export const CHECKIN_INTERVAL = 30 * 60 * 1000; // 30 minutes
+export const MAX_MISSED_CHECKINS = 2;
 
 // ============================================
 // DESIGN SYSTEM - SheSafe Theme

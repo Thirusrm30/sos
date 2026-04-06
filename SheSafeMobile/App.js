@@ -1,10 +1,13 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Text, View, StyleSheet, ActivityIndicator } from 'react-native';
+import { Text, View, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { FakeCallProvider } from './context/FakeCallContext';
+import { addNotificationResponseReceivedListener } from './services/notificationService';
+import { confirmCheckIn } from './services/checkInService';
 import LoginScreen from './screens/LoginScreen';
 import SOSScreen from './screens/SOSScreen';
 import StartTripScreen from './screens/StartTripScreen';
@@ -18,6 +21,9 @@ import BuddyMatchesScreen, { MyMatchesScreen } from './screens/BuddyMatchesScree
 import ChatScreen from './screens/ChatScreen';
 import SafeRouteScreen from './screens/SafeRouteScreen';
 import ProfileScreen from './screens/ProfileScreen';
+import FakeCallScreen from './screens/FakeCallScreen';
+import FakeCallActiveScreen from './screens/FakeCallActiveScreen';
+import FakeCallUI from './components/FakeCallUI';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from './utils/constants';
 
 const Stack = createNativeStackNavigator();
@@ -87,6 +93,12 @@ const SafeRouteStack = () => (
 const ProfileStack = () => (
   <Stack.Navigator screenOptions={screenOptions(COLORS.accent)}>
     <Stack.Screen name="ProfileMain" component={ProfileScreen} options={{ headerShown: false }} />
+  </Stack.Navigator>
+);
+
+const FakeCallStack = () => (
+  <Stack.Navigator screenOptions={screenOptions(COLORS.secondary)}>
+    <Stack.Screen name="FakeCallMain" component={FakeCallScreen} options={{ headerShown: false }} />
   </Stack.Navigator>
 );
 
@@ -163,6 +175,14 @@ const MainTabs = () => (
         tabBarIcon: ({ focused }) => <TabIcon icon="👤" focused={focused} />,
       }}
     />
+    <Tab.Screen
+      name="FakeCall"
+      component={FakeCallStack}
+      options={{
+        tabBarLabel: 'Fake Call',
+        tabBarIcon: ({ focused }) => <TabIcon icon="📞" focused={focused} />,
+      }}
+    />
   </Tab.Navigator>
 );
 
@@ -179,16 +199,41 @@ const AppNavigator = () => {
   }
 
   return (
-    <NavigationContainer>
-      {isAuthenticated ? <MainTabs /> : <LoginScreen onLogin={login} />}
-    </NavigationContainer>
+    <>
+      <NavigationContainer>
+        {isAuthenticated ? <MainTabs /> : <LoginScreen onLogin={login} />}
+      </NavigationContainer>
+      <FakeCallUI />
+      <FakeCallActiveScreen />
+    </>
   );
 };
 
 const App = () => {
+  useEffect(() => {
+    const subscription = addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data;
+      
+      if (data?.type === 'checkin') {
+        const tripId = data.tripId;
+        confirmCheckIn(tripId || 'unknown').then(() => {
+          Alert.alert('✅ Safety Confirmed', 'You have confirmed your safety.');
+        }).catch(err => {
+          console.log('Check-in confirmation error:', err);
+        });
+      }
+    });
+
+    return () => {
+      if (subscription) subscription.remove();
+    };
+  }, []);
+
   return (
     <AuthProvider>
-      <AppNavigator />
+      <FakeCallProvider>
+        <AppNavigator />
+      </FakeCallProvider>
     </AuthProvider>
   );
 };

@@ -70,7 +70,7 @@ const generalLimiter = rateLimit({
 
 const sosLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 5,
+  max: 30,
   message: { success: false, message: 'SOS rate limit exceeded, please try again later' },
   standardHeaders: true,
   legacyHeaders: false
@@ -1762,6 +1762,114 @@ app.post('/route/suggest', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to suggest routes',
+      error: error.message
+    });
+  }
+});
+
+// ==================== CHECK-IN API ====================
+
+const checkInSchema = new mongoose.Schema({
+  tripId: {
+    type: String,
+    required: true
+  },
+  status: {
+    type: String,
+    enum: ['done', 'missed'],
+    required: true
+  },
+  missedCount: {
+    type: Number,
+    default: 0
+  },
+  timestamp: {
+    type: Date,
+    default: Date.now
+  }
+}, { timestamps: true });
+
+const CheckIn = mongoose.model('CheckIn', checkInSchema);
+
+// POST /checkin/status - Record check-in status
+app.post('/checkin/status', async (req, res) => {
+  try {
+    const { tripId, status, missedCount } = req.body;
+
+    if (!tripId || !status) {
+      return res.status(400).json({
+        success: false,
+        message: 'Trip ID and status are required'
+      });
+    }
+
+    const validStatuses = ['done', 'missed'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status. Use "done" or "missed"'
+      });
+    }
+
+    const checkIn = new CheckIn({
+      tripId,
+      status,
+      missedCount: missedCount || 0,
+      timestamp: new Date()
+    });
+
+    await checkIn.save();
+
+    console.log(`📝 Check-in recorded for trip ${tripId}: ${status} (missed: ${missedCount || 0})`);
+
+    res.json({
+      success: true,
+      message: 'Check-in status recorded',
+      data: {
+        id: checkIn._id,
+        tripId: checkIn.tripId,
+        status: checkIn.status,
+        missedCount: checkIn.missedCount,
+        timestamp: checkIn.timestamp
+      }
+    });
+
+  } catch (error) {
+    console.error('Error recording check-in:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to record check-in status',
+      error: error.message
+    });
+  }
+});
+
+// GET /checkin/history/:tripId - Get check-in history for a trip
+app.get('/checkin/history/:tripId', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+
+    const checkIns = await CheckIn.find({ tripId })
+      .sort({ timestamp: -1 })
+      .limit(50);
+
+    res.json({
+      success: true,
+      count: checkIns.length,
+      checkIns: checkIns.map(c => ({
+        id: c._id,
+        tripId: c.tripId,
+        status: c.status,
+        missedCount: c.missedCount,
+        timestamp: c.timestamp
+      }))
+    });
+
+  } catch (error) {
+    console.error('Error fetching check-in history:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch check-in history',
       error: error.message
     });
   }

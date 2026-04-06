@@ -53,6 +53,13 @@ export const requestNotificationPermissions = async () => {
       importance: Notifications.AndroidImportance.DEFAULT,
       sound: 'default',
     });
+
+    await Notifications.setNotificationChannelAsync('checkin', {
+      name: 'Safety Check-ins',
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 250, 250],
+      sound: 'default',
+    });
   }
 
   return true;
@@ -136,6 +143,40 @@ export const showTripReminderNotification = async () => {
   );
 };
 
+export const showCheckInNotification = async (tripId) => {
+  await scheduleLocalNotification(
+    '🔔 Check-in Required',
+    'Are you safe? Tap to confirm your safety.',
+    { type: 'checkin', tripId }
+  );
+};
+
+export const scheduleCheckInReminder = async (tripId, intervalMs = 30 * 60 * 1000) => {
+  const checkInId = `checkin-${Date.now()}`;
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: '🔔 Check-in Required',
+      body: 'Are you safe? Tap to confirm your safety.',
+      data: { type: 'checkin', checkInId, tripId },
+      sound: true,
+    },
+    trigger: {
+      seconds: intervalMs / 1000,
+      repeats: true,
+    },
+  });
+  return checkInId;
+};
+
+export const cancelCheckInReminders = async () => {
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  for (const notification of scheduled) {
+    if (notification.content.data?.type === 'checkin') {
+      await Notifications.cancelScheduledNotificationAsync(notification.identifier);
+    }
+  }
+};
+
 export const addNotificationReceivedListener = (callback) => {
   return Notifications.addNotificationReceivedListener(callback);
 };
@@ -156,6 +197,9 @@ export default {
   showBuddyMatchNotification,
   showSafetyAlertNotification,
   showTripReminderNotification,
+  showCheckInNotification,
+  scheduleCheckInReminder,
+  cancelCheckInReminders,
   addNotificationReceivedListener,
   addNotificationResponseReceivedListener,
   cancelAllNotifications,
