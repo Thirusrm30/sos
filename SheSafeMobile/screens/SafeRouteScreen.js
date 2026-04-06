@@ -17,6 +17,32 @@ import { suggestRoutes } from '../services/routeService';
 
 const { width } = Dimensions.get('window');
 
+const parseCoordinates = (input) => {
+  if (!input) return null;
+  
+  const trimmed = input.trim();
+  
+  const commaMatch = trimmed.match(/^(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)$/);
+  if (commaMatch) {
+    const lat = parseFloat(commaMatch[1]);
+    const lng = parseFloat(commaMatch[2]);
+    if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return { lat, lng };
+    }
+  }
+  
+  const spaceMatch = trimmed.match(/^(-?\d+\.?\d*)\s+(-?\d+\.?\d*)$/);
+  if (spaceMatch) {
+    const lat = parseFloat(spaceMatch[1]);
+    const lng = parseFloat(spaceMatch[2]);
+    if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return { lat, lng };
+    }
+  }
+  
+  return null;
+};
+
 const SafeRouteScreen = ({ navigation }) => {
   const mapRef = useRef(null);
   const [origin, setOrigin] = useState('');
@@ -25,6 +51,7 @@ const SafeRouteScreen = ({ navigation }) => {
   const [currentLocation, setCurrentLocation] = useState(null);
   const [routes, setRoutes] = useState(null);
   const [selectedRoute, setSelectedRoute] = useState('fastest');
+  const [destinationCoords, setDestinationCoords] = useState(null);
 
   useEffect(() => {
     getCurrentLoc();
@@ -47,28 +74,45 @@ const SafeRouteScreen = ({ navigation }) => {
     }
   };
 
+  const handleDestinationChange = (text) => {
+    setDestination(text);
+    const coords = parseCoordinates(text);
+    setDestinationCoords(coords);
+  };
+
   const handleFindRoutes = async () => {
-    if (!origin.trim() || !destination.trim()) {
-      Alert.alert('Required', 'Please enter origin and destination');
+    if (!destination.trim()) {
+      Alert.alert('Required', 'Please enter a destination');
+      return;
+    }
+
+    const originCoords = currentLocation || null;
+    const destCoords = destinationCoords;
+
+    if (!originCoords && !destCoords) {
+      Alert.alert('Error', 'Unable to determine location. Please use current location or enter valid coordinates.');
+      return;
+    }
+
+    if (!destCoords) {
+      Alert.alert('Invalid Destination', 'Please enter destination in format: "latitude, longitude" (e.g., "12.95, 77.65")');
       return;
     }
 
     setLoading(true);
     try {
-      const originCoords = currentLocation
-        ? { lat: currentLocation.lat, lng: currentLocation.lng }
-        : { lat: 12.9, lng: 77.6 };
+      const finalOrigin = originCoords 
+        ? { lat: originCoords.lat, lng: originCoords.lng }
+        : null;
 
-      const destCoords = { lat: 12.95, lng: 77.65 };
-
-      const result = await suggestRoutes(originCoords, destCoords);
+      const result = await suggestRoutes(finalOrigin, destCoords);
 
       if (result.success) {
         setRoutes(result);
         
-        if (mapRef.current) {
+        if (mapRef.current && result.fastest.points.length > 0) {
           mapRef.current.fitToCoordinates(
-            [...result.fastest.points, ...result.safest.points],
+            result.fastest.points,
             {
               edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
               animated: true,
@@ -194,14 +238,24 @@ const SafeRouteScreen = ({ navigation }) => {
 
             <View style={styles.inputHeader}>
               <Text style={styles.label}>Destination</Text>
+              {destinationCoords && (
+                <Text style={styles.coordsValid}>✓ Valid coordinates</Text>
+              )}
             </View>
             <TextInput
-              style={styles.input}
-              placeholder="Enter destination"
+              style={[
+                styles.input,
+                destinationCoords && styles.inputValid,
+              ]}
+              placeholder="Enter coordinates (e.g., 12.95, 77.65)"
               placeholderTextColor={COLORS.textMuted}
               value={destination}
-              onChangeText={setDestination}
+              onChangeText={handleDestinationChange}
+              keyboardType="default"
             />
+            <Text style={styles.helperText}>
+              Enter as: latitude, longitude (e.g., 12.95, 77.65)
+            </Text>
           </View>
 
           <TouchableOpacity
@@ -333,6 +387,21 @@ const styles = StyleSheet.create({
     fontSize: FONTS.base,
     marginBottom: SPACING.base,
     color: COLORS.text,
+  },
+  inputValid: {
+    borderColor: COLORS.success,
+    backgroundColor: '#F0FDF4',
+  },
+  coordsValid: {
+    fontSize: FONTS.xs,
+    color: COLORS.success,
+    fontWeight: FONTS.medium,
+  },
+  helperText: {
+    fontSize: FONTS.xs,
+    color: COLORS.textMuted,
+    marginTop: -SPACING.sm,
+    marginBottom: SPACING.base,
   },
   inputRow: {
     flexDirection: 'row',

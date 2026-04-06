@@ -1,5 +1,6 @@
 // API Configuration
-export const API_URL = 'http://192.168.1.6:3001';
+import { getApiUrl } from '../config/env';
+export const API_URL = getApiUrl();
 
 // SOS Configuration
 export const COUNTDOWN_SECONDS = 5;

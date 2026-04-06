@@ -8,6 +8,7 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const server = http.createServer(app);
@@ -42,10 +43,10 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
-// MongoDB Connection (Local MongoDB)
-const MONGODB_URI = 'mongodb://127.0.0.1:27017/shesafe';
+// MongoDB Connection
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/shesafe';
 
 // Connect to MongoDB
 mongoose.connect(MONGODB_URI)
@@ -56,6 +57,87 @@ mongoose.connect(MONGODB_URI)
 app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Rate Limiting
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200,
+  message: { success: false, message: 'Too many requests, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+const sosLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 5,
+  message: { success: false, message: 'SOS rate limit exceeded, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+const smsLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 20,
+  message: { success: false, message: 'SMS rate limit exceeded' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+app.use('/api/', generalLimiter);
+app.use('/send-sos', sosLimiter);
+app.use('/sms/', smsLimiter);
+
+// Input Validation Middleware
+function validateRequired(fields) {
+  return (req, res, next) => {
+    const missing = fields.filter(field => {
+      const value = req.body[field];
+      return value === undefined || value === null || value === '';
+    });
+    if (missing.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Missing required fields: ${missing.join(', ')}`
+      });
+    }
+    next();
+  };
+}
+
+function sanitizeString(value, maxLength = 500) {
+  if (typeof value !== 'string') return value;
+  return value.trim().slice(0, maxLength).replace(/[<>]/g, '');
+}
+
+function validateLocation(req, res, next) {
+  const { lat, lng } = req.body;
+  if (lat !== undefined && lng !== undefined) {
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lng);
+    if (isNaN(latitude) || isNaN(longitude) ||
+        latitude < -90 || latitude > 90 ||
+        longitude < -180 || longitude > 180) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid coordinates'
+      });
+    }
+  }
+  next();
+}
+
+function validatePhone(phone) {
+  if (!phone) return true;
+  return /^[0-9]{10,15}$/.test(phone.replace(/[\s-]/g, ''));
+}
+
+function validateUUID(id) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
+
+function validateMongoId(id) {
+  return /^[0-9a-fA-F]{24}$/.test(id);
+}
 
 // ==================== TRIP SCHEMA ====================
 
@@ -387,6 +469,7 @@ function toRad(deg) {
   return deg * (Math.PI / 180);
 }
 
+
 // Calculate route safety score based on alerts
 async function calculateRouteSafety(routePoints) {
   if (!routePoints || routePoints.length < 2) {
@@ -453,7 +536,6 @@ app.post('/trip/start', async (req, res) => {
   try {
     const { origin, destination, eta, contactPhone } = req.body;
 
-    // Validate inputs
     if (!origin || !destination || !eta) {
       return res.status(400).json({
         success: false,
@@ -461,9 +543,8 @@ app.post('/trip/start', async (req, res) => {
       });
     }
 
-    // Generate unique trip ID
     const tripId = uuidv4();
-    const baseUrl = `http://localhost:3001`;
+    const baseUrl = `http://${req.headers.host}`;
 
     // Create new trip
     const trip = new Trip({
@@ -787,32 +868,40 @@ app.get('/api/track/:tripId', async (req, res) => {
   }
 });
 
-// ==================== SOS APIs (Existing) ====================
+// ==================== SOS APIs ====================
 
-app.post('/send-sos', async (req, res) => {
+app.post('/send-sos', validateLocation, async (req, res) => {
   try {
-    const { lat, lng } = req.body;
+    const { lat, lng, userId } = req.body;
 
-    if (!lat || !lng) {
+    if (lat === undefined || lng === undefined) {
       return res.status(400).json({
         success: false,
         message: 'Latitude and longitude are required'
       });
     }
 
-    // Save SOS log
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lng);
+
+    if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid coordinates'
+      });
+    }
+
     const sosEntry = new SOSLog({
-      lat,
-      lng,
-      locationUrl: `https://maps.google.com/?q=${lat},${lng}`,
+      lat: latitude,
+      lng: longitude,
+      locationUrl: `https://maps.google.com/?q=${latitude},${longitude}`,
       timestamp: new Date()
     });
     await sosEntry.save();
 
-    console.log('SOS Alert Received:', { lat, lng });
+    console.log('SOS Alert Received:', { lat: latitude, lng: longitude });
 
-    // Send emergency SMS
-    await sendEmergencySMS(lat, lng);
+    await sendEmergencySMS(latitude, longitude, null, userId);
 
     res.json({
       success: true,
@@ -866,15 +955,22 @@ app.post('/ride/add', async (req, res) => {
       });
     }
 
-    // Create new ride
+    const validTypes = ['Cab', 'Auto', 'Bus', 'Other'];
+    if (!validTypes.includes(vehicleType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid vehicle type'
+      });
+    }
+
     const ride = new Ride({
-      vehicleNumber: vehicleNumber.toUpperCase(),
+      vehicleNumber: sanitizeString(vehicleNumber, 15).toUpperCase(),
       vehicleType,
-      driverName: driverName || 'Unknown',
+      driverName: sanitizeString(driverName, 100) || 'Unknown',
       location: {
-        lat,
-        lng,
-        address: `https://maps.google.com/?q=${lat},${lng}`
+        lat: lat ? parseFloat(lat) : 0,
+        lng: lng ? parseFloat(lng) : 0,
+        address: `https://maps.google.com/?q=${lat || 0},${lng || 0}`
       },
       sharedAt: new Date()
     });
@@ -995,7 +1091,6 @@ app.post('/alert/add', async (req, res) => {
   try {
     const { type, description, lat, lng, reportedBy } = req.body;
 
-    // Validate inputs
     if (!type || !description || lat === undefined || lng === undefined) {
       return res.status(400).json({
         success: false,
@@ -1003,17 +1098,35 @@ app.post('/alert/add', async (req, res) => {
       });
     }
 
-    // Create new alert
+    const validTypes = ['Harassment', 'Poor Lighting', 'Unsafe Road', 'Suspicious Activity', 'Other'];
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid alert type'
+      });
+    }
+
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lng);
+    if (isNaN(latitude) || isNaN(longitude) ||
+        latitude < -90 || latitude > 90 ||
+        longitude < -180 || longitude > 180) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid coordinates'
+      });
+    }
+
     const alert = new Alert({
       type,
-      description,
+      description: sanitizeString(description, 500),
       location: {
-        lat,
-        lng
+        lat: latitude,
+        lng: longitude
       },
-      reportedBy: reportedBy || 'Anonymous',
+      reportedBy: sanitizeString(reportedBy, 50) || 'Anonymous',
       createdAt: new Date(),
-      expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000), // 48 hours
+      expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
       upvotes: 1
     });
 
@@ -1065,6 +1178,7 @@ app.get('/alert/all', async (req, res) => {
       success: true,
       count: alerts.length,
       alerts: alerts.map(alert => ({
+        _id: alert._id,
         id: alert._id,
         type: alert.type,
         description: alert.description,
@@ -1161,21 +1275,25 @@ app.post('/user/register', async (req, res) => {
       });
     }
 
-    // Check if user exists
+    if (!validateUUID(userId) && !/^[a-zA-Z0-9_-]{3,50}$/.test(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID format'
+      });
+    }
+
     let user = await User.findOne({ userId });
 
     if (user) {
-      // Update existing user
-      user.name = name || user.name;
-      user.phone = phone || user.phone;
+      user.name = sanitizeString(name, 100) || user.name;
+      user.phone = sanitizeString(phone, 20) || user.phone;
       user.emergencyContacts = emergencyContacts || user.emergencyContacts;
       await user.save();
     } else {
-      // Create new user
       user = new User({
         userId,
-        name: name || 'User',
-        phone: phone || '',
+        name: sanitizeString(name, 100) || 'User',
+        phone: sanitizeString(phone, 20) || '',
         emergencyContacts: emergencyContacts || []
       });
       await user.save();
@@ -1291,6 +1409,13 @@ app.post('/user/:userId/emergency', async (req, res) => {
       });
     }
 
+    if (!validatePhone(phone)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid phone number format'
+      });
+    }
+
     const user = await User.findOne({ userId });
 
     if (!user) {
@@ -1300,7 +1425,11 @@ app.post('/user/:userId/emergency', async (req, res) => {
       });
     }
 
-    user.emergencyContacts.push({ name, phone, relation: relation || 'Other' });
+    user.emergencyContacts.push({
+      name: sanitizeString(name, 100),
+      phone: sanitizeString(phone, 20),
+      relation: sanitizeString(relation, 50) || 'Other'
+    });
     await user.save();
 
     res.json({
@@ -1562,13 +1691,12 @@ app.post('/chat/send', async (req, res) => {
     const chatMessage = new ChatMessage({
       matchId,
       senderId,
-      senderName: senderName || 'User',
-      message
+      senderName: sanitizeString(senderName, 50) || 'User',
+      message: sanitizeString(message, 1000)
     });
 
     await chatMessage.save();
 
-    // Emit to socket room
     if (global.io) {
       global.io.to(matchId).emit('newMessage', {
         id: chatMessage._id,
@@ -1723,75 +1851,6 @@ function generateSampleRoutes(origin, destination) {
     }
   ];
 }
-
-// ==================== USER APIs ====================
-
-app.post('/user/register', async (req, res) => {
-  try {
-    const { userId, name, phone, emergencyContacts } = req.body;
-    let user = await User.findOne({ userId });
-    
-    if (user) {
-      if (name) user.name = name;
-      if (phone) user.phone = phone;
-      if (emergencyContacts) user.emergencyContacts = emergencyContacts;
-    } else {
-      user = new User({ userId, name, phone, emergencyContacts });
-    }
-    await user.save();
-    res.json({ success: true, user });
-  } catch (error) {
-    console.error('Error registering user:', error);
-    res.status(500).json({ success: false, message: 'Failed to register user', error: error.message });
-  }
-});
-
-app.get('/user/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const user = await User.findOne({ userId });
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-    res.json({ success: true, user });
-  } catch (error) {
-    console.error('Error fetching user:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch user', error: error.message });
-  }
-});
-
-app.put('/user/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const updates = req.body;
-    const user = await User.findOneAndUpdate({ userId }, updates, { new: true });
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-    res.json({ success: true, user });
-  } catch (error) {
-    console.error('Error updating user:', error);
-    res.status(500).json({ success: false, message: 'Failed to update user', error: error.message });
-  }
-});
-
-app.post('/user/:userId/emergency', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const contact = req.body;
-    const user = await User.findOne({ userId });
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-    if (!user.emergencyContacts) user.emergencyContacts = [];
-    user.emergencyContacts.push(contact);
-    await user.save();
-    res.json({ success: true, user });
-  } catch (error) {
-    console.error('Error adding emergency contact:', error);
-    res.status(500).json({ success: false, message: 'Failed to add emergency contact', error: error.message });
-  }
-});
 
 // ==================== AUTO ALERT SYSTEM ====================
 

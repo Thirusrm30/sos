@@ -11,7 +11,7 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "SheSafe needs your location to send emergency alerts to your contacts.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "SheSafe needs background location access to continuously update your location during emergencies.",
-        "UIBackgroundModes": ["location", "fetch"]
+        "UIBackgroundModes": ["location", "fetch", "remote-notification"]
       }
     },
     "android": {
@@ -22,7 +22,9 @@
         "ACCESS_BACKGROUND_LOCATION",
         "VIBRATE",
         "INTERNET",
-        "ACCESS_NETWORK_STATE"
+        "ACCESS_NETWORK_STATE",
+        "RECEIVE_BOOT_COMPLETED",
+        "SCHEDULE_EXACT_ALARM"
       ]
     },
     "web": {},
@@ -31,6 +33,14 @@
         "expo-location",
         {
           "locationAlwaysAndWhenInUsePermission": "Allow SheSafe to use your location to send emergency alerts."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#DC2626",
+          "sounds": []
         }
       ]
     ]
