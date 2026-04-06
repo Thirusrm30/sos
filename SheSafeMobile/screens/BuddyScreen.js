@@ -13,6 +13,7 @@ import { Picker } from '@react-native-picker/picker';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../utils/constants';
 import { getCurrentLocation } from '../services/locationService';
 import { findBuddy } from '../services/buddyService';
+import { geocodeAddress, reverseGeocode } from '../services/geocodingService';
 
 const BuddyScreen = ({ navigation }) => {
   const [origin, setOrigin] = useState('');
@@ -21,22 +22,78 @@ const BuddyScreen = ({ navigation }) => {
   const [departureMinute, setDepartureMinute] = useState('0');
   const [loading, setLoading] = useState(false);
   const [currentLocation, setCurrentLocation] = useState(null);
+  const [originCoords, setOriginCoords] = useState(null);
+  const [destinationCoords, setDestinationCoords] = useState(null);
+  const [geocodingOrigin, setGeocodingOrigin] = useState(false);
+  const [geocodingDestination, setGeocodingDestination] = useState(false);
+
+  const parseCoordinates = (input) => {
+    if (!input) return null;
+    const trimmed = input.trim();
+    const commaMatch = trimmed.match(/^(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)$/);
+    if (commaMatch) {
+      const lat = parseFloat(commaMatch[1]);
+      const lng = parseFloat(commaMatch[2]);
+      if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+        return { lat, lng };
+      }
+    }
+    return null;
+  };
 
   const handleUseCurrentLocation = async () => {
-    setLoading(true);
+    setGeocodingOrigin(true);
     try {
       const location = await getCurrentLocation();
       if (location) {
         setCurrentLocation(location);
-        setOrigin(`${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`);
-        Alert.alert('Location Set', 'Current location set as origin');
+        const addressResult = await reverseGeocode(location.lat, location.lng);
+        if (addressResult.success) {
+          setOrigin(addressResult.data.formattedAddress);
+          setOriginCoords({ lat: location.lat, lng: location.lng });
+        } else {
+          setOrigin(`${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`);
+          setOriginCoords({ lat: location.lat, lng: location.lng });
+        }
       } else {
         Alert.alert('Error', 'Unable to get current location');
       }
     } catch (error) {
       Alert.alert('Error', 'Failed to get location');
     } finally {
-      setLoading(false);
+      setGeocodingOrigin(false);
+    }
+  };
+
+  const handleOriginChange = async (text) => {
+    setOrigin(text);
+    const coords = parseCoordinates(text);
+    setOriginCoords(coords);
+  };
+
+  const handleDestinationChange = async (text) => {
+    setDestination(text);
+    const coords = parseCoordinates(text);
+    setDestinationCoords(coords);
+  };
+
+  const handleSearchDestination = async () => {
+    if (!destination.trim()) {
+      Alert.alert('Required', 'Please enter a destination');
+      return;
+    }
+
+    if (destinationCoords) return;
+
+    setGeocodingDestination(true);
+    const result = await geocodeAddress(destination);
+    setGeocodingDestination(false);
+
+    if (result.success) {
+      setDestination(result.data.formattedAddress);
+      setDestinationCoords({ lat: result.data.lat, lng: result.data.lng });
+    } else {
+      Alert.alert('Address Not Found', `${result.message}\n\nPlease try a more specific address.`);
     }
   };
 
@@ -46,27 +103,40 @@ const BuddyScreen = ({ navigation }) => {
       return;
     }
 
+    if (!originCoords && !currentLocation) {
+      Alert.alert('Error', 'Please set your origin using current location');
+      return;
+    }
+
+    if (!destinationCoords) {
+      Alert.alert('Error', 'Please search for your destination first');
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const originCoords = currentLocation
-        ? { lat: currentLocation.lat, lng: currentLocation.lng, address: origin }
-        : { lat: 0, lng: 0, address: origin };
-
-      const destCoords = { lat: 0, lng: 0, address: destination };
+      const finalOriginCoords = originCoords || { 
+        lat: currentLocation.lat, 
+        lng: currentLocation.lng 
+      };
 
       const departureTime = new Date();
       departureTime.setHours(parseInt(departureHour), parseInt(departureMinute), 0, 0);
 
-      const result = await findBuddy(originCoords, destCoords, departureTime.toISOString());
+      const result = await findBuddy(
+        { lat: finalOriginCoords.lat, lng: finalOriginCoords.lng, address: origin },
+        { lat: destinationCoords.lat, lng: destinationCoords.lng, address: destination },
+        departureTime.toISOString()
+      );
 
       if (result.success) {
         if (result.matches && result.matches.length > 0) {
           navigation.navigate('BuddyMatches', {
             requestId: result.requestId,
             matches: result.matches,
-            origin: originCoords,
-            destination: destCoords
+            origin: { lat: finalOriginCoords.lat, lng: finalOriginCoords.lng, address: origin },
+            destination: { lat: destinationCoords.lat, lng: destinationCoords.lng, address: destination }
           });
         } else {
           Alert.alert(
@@ -101,6 +171,7 @@ const BuddyScreen = ({ navigation }) => {
         <View style={styles.card}>
           <View style={styles.inputHeader}>
             <Text style={styles.label}>Origin</Text>
+            {originCoords && <Text style={styles.coordsValid}>✓ Set</Text>}
           </View>
           <View style={styles.inputRow}>
             <TextInput
@@ -108,14 +179,14 @@ const BuddyScreen = ({ navigation }) => {
               placeholder="Enter starting point"
               placeholderTextColor={COLORS.textMuted}
               value={origin}
-              onChangeText={setOrigin}
+              onChangeText={handleOriginChange}
             />
             <TouchableOpacity
               style={styles.locationButton}
               onPress={handleUseCurrentLocation}
-              disabled={loading}
+              disabled={geocodingOrigin}
             >
-              {loading ? (
+              {geocodingOrigin ? (
                 <ActivityIndicator size="small" color={COLORS.textInverse} />
               ) : (
                 <Text style={styles.locationButtonText}>📍</Text>
@@ -125,14 +196,32 @@ const BuddyScreen = ({ navigation }) => {
 
           <View style={styles.inputHeader}>
             <Text style={styles.label}>Destination</Text>
+            {destinationCoords && <Text style={styles.coordsValid}>✓ Found</Text>}
           </View>
           <TextInput
-            style={styles.input}
-            placeholder="Enter destination"
+            style={[
+              styles.input,
+              destinationCoords && styles.inputValid,
+            ]}
+            placeholder="Enter destination address"
             placeholderTextColor={COLORS.textMuted}
             value={destination}
-            onChangeText={setDestination}
+            onChangeText={handleDestinationChange}
           />
+          
+          {!destinationCoords && destination.trim() && (
+            <TouchableOpacity
+              style={styles.searchButton}
+              onPress={handleSearchDestination}
+              disabled={geocodingDestination}
+            >
+              {geocodingDestination ? (
+                <ActivityIndicator size="small" color={COLORS.textInverse} />
+              ) : (
+                <Text style={styles.searchButtonText}>🔍 Search Address</Text>
+              )}
+            </TouchableOpacity>
+          )}
 
           <View style={styles.inputHeader}>
             <Text style={styles.label}>Departure Time</Text>
@@ -242,11 +331,19 @@ const styles = StyleSheet.create({
   },
   inputHeader: {
     marginBottom: SPACING.sm,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   label: {
     fontSize: FONTS.base,
     fontWeight: FONTS.semibold,
     color: COLORS.text,
+  },
+  coordsValid: {
+    fontSize: FONTS.xs,
+    color: COLORS.success,
+    fontWeight: FONTS.medium,
   },
   input: {
     backgroundColor: COLORS.surfaceSecondary,
@@ -257,6 +354,10 @@ const styles = StyleSheet.create({
     fontSize: FONTS.base,
     marginBottom: SPACING.base,
     color: COLORS.text,
+  },
+  inputValid: {
+    borderColor: COLORS.success,
+    backgroundColor: '#F0FDF4',
   },
   inputRow: {
     flexDirection: 'row',
@@ -272,6 +373,19 @@ const styles = StyleSheet.create({
   },
   locationButtonText: {
     fontSize: 20,
+  },
+  searchButton: {
+    backgroundColor: COLORS.info,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.base,
+    borderRadius: RADIUS.base,
+    alignItems: 'center',
+    marginBottom: SPACING.sm,
+  },
+  searchButtonText: {
+    color: COLORS.textInverse,
+    fontSize: FONTS.sm,
+    fontWeight: FONTS.medium,
   },
   timeContainer: {
     flexDirection: 'row',

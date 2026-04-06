@@ -15,12 +15,28 @@ import { Picker } from '@react-native-picker/picker';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS } from '../utils/constants';
 import { getCurrentLocation } from '../services/locationService';
 import { startTrip } from '../services/tripService';
+import { geocodeAddress } from '../services/geocodingService';
 
 const StartTripScreen = ({ navigation }) => {
   const [destination, setDestination] = useState('');
   const [hours, setHours] = useState('1');
   const [minutes, setMinutes] = useState('0');
   const [loading, setLoading] = useState(false);
+  const [geocoding, setGeocoding] = useState(false);
+
+  const parseCoordinates = (input) => {
+    if (!input) return null;
+    const trimmed = input.trim();
+    const commaMatch = trimmed.match(/^(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)$/);
+    if (commaMatch) {
+      const lat = parseFloat(commaMatch[1]);
+      const lng = parseFloat(commaMatch[2]);
+      if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+        return { lat, lng };
+      }
+    }
+    return null;
+  };
 
   const handleStartTrip = async () => {
     if (!destination.trim()) {
@@ -39,20 +55,35 @@ const StartTripScreen = ({ navigation }) => {
         return;
       }
 
+      let destCoords = parseCoordinates(destination);
+      let destAddress = destination;
+
+      if (!destCoords) {
+        setLoading(false);
+        Alert.alert(
+          'Geocode Required',
+          'Please enter coordinates (e.g., "12.95, 77.65") or use the "Search Address" button to find your destination.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      setLoading(true);
+
       const etaHours = parseInt(hours) || 0;
       const etaMinutes = parseInt(minutes) || 0;
       const eta = new Date(Date.now() + (etaHours * 60 + etaMinutes) * 60 * 1000);
 
       const result = await startTrip(
         { lat: location.lat, lng: location.lng, address: 'Current Location' },
-        { lat: 0, lng: 0, address: destination },
+        { lat: destCoords.lat, lng: destCoords.lng, address: destAddress },
         eta
       );
 
       if (result.success) {
         Alert.alert(
           'Trip Started! 🚗',
-          `Your trip to "${destination}" has been started.\n\nShare this link with your contacts:\n${result.trackingLink}`,
+          `Your trip to "${destAddress}" has been started.\n\nShare this link with your contacts:\n${result.trackingLink}`,
           [
             {
               text: 'View Trip',
@@ -60,7 +91,7 @@ const StartTripScreen = ({ navigation }) => {
                 navigation.navigate('ActiveTrip', {
                   tripId: result.tripId,
                   trackingLink: result.trackingLink,
-                  destination: destination,
+                  destination: destAddress,
                 });
               },
             },
@@ -75,6 +106,31 @@ const StartTripScreen = ({ navigation }) => {
       Alert.alert('Error', 'Failed to start trip. Please check your connection.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSearchAddress = async () => {
+    if (!destination.trim()) {
+      Alert.alert('Required', 'Please enter a destination address');
+      return;
+    }
+
+    setGeocoding(true);
+    const result = await geocodeAddress(destination);
+    setGeocoding(false);
+
+    if (result.success) {
+      setDestination(result.data.formattedAddress);
+      Alert.alert(
+        'Address Found!',
+        `Location: ${result.data.formattedAddress}\n\nYou can now start your trip with coordinates.\n\nLat: ${result.data.lat.toFixed(6)}\nLng: ${result.data.lng.toFixed(6)}`,
+        [{ text: 'OK' }]
+      );
+    } else {
+      Alert.alert(
+        'Address Not Found',
+        `${result.message}\n\nPlease try a more specific address (e.g., "123 MG Road, Bangalore") or enter coordinates (e.g., "12.95, 77.65")`
+      );
     }
   };
 
@@ -103,11 +159,26 @@ const StartTripScreen = ({ navigation }) => {
           </View>
           <TextInput
             style={styles.input}
-            placeholder="e.g., Home, Office, Friend's place"
+            placeholder="Enter address or coordinates (e.g., 12.95, 77.65)"
             placeholderTextColor={COLORS.textMuted}
             value={destination}
             onChangeText={setDestination}
           />
+          
+          <TouchableOpacity
+            style={styles.searchButton}
+            onPress={handleSearchAddress}
+            disabled={geocoding || !destination.trim()}
+          >
+            {geocoding ? (
+              <ActivityIndicator size="small" color={COLORS.textInverse} />
+            ) : (
+              <>
+                <Text style={styles.searchButtonIcon}>🔍</Text>
+                <Text style={styles.searchButtonText}>Search Address</Text>
+              </>
+            )}
+          </TouchableOpacity>
 
           <View style={styles.inputHeader}>
             <Text style={styles.label}>Expected Time of Arrival (ETA)</Text>
@@ -222,6 +293,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: SPACING.sm,
+    marginTop: SPACING.base,
   },
   label: {
     fontSize: FONTS.base,
@@ -239,8 +311,26 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.base,
     padding: SPACING.md,
     fontSize: FONTS.base,
-    marginBottom: SPACING.lg,
     color: COLORS.text,
+  },
+  searchButton: {
+    backgroundColor: COLORS.info,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.base,
+    borderRadius: RADIUS.base,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: SPACING.sm,
+  },
+  searchButtonIcon: {
+    fontSize: 16,
+    marginRight: SPACING.sm,
+  },
+  searchButtonText: {
+    color: COLORS.textInverse,
+    fontSize: FONTS.sm,
+    fontWeight: FONTS.medium,
   },
   etaContainer: {
     flexDirection: 'row',

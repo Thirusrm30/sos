@@ -2,13 +2,14 @@ const express = require('express');
 require('dotenv').config();
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const fetch = require('node-fetch');
 const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
 const rateLimit = require('express-rate-limit');
+const smsService = require('./services/smsService');
+const directionsService = require('./services/directionsService');
 
 const app = express();
 const server = http.createServer(app);
@@ -392,65 +393,6 @@ const userSchema = new mongoose.Schema({
 const User = mongoose.model('User', userSchema);
 
 // ==================== HELPER FUNCTIONS ====================
-
-// Send SMS using Fast2SMS API
-async function sendSMS(phoneNumber, message) {
-  try {
-    const FAST2SMS_API_KEY = process.env.FAST2SMS_API_KEY || 'YOUR_FAST2SMS_API_KEY_HERE';
-    
-    const response = await fetch('https://www.fast2sms.com/dev/bulkV2', {
-      method: 'POST',
-      headers: {
-        'authorization': FAST2SMS_API_KEY,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        route: 'otp',
-        variables_values: message,
-        numbers: phoneNumber,
-        flash: 0
-      })
-    });
-
-    const data = await response.json();
-    console.log('SMS Response:', data);
-    return data;
-  } catch (error) {
-    console.error('SMS Error:', error);
-    throw error;
-  }
-}
-
-// Emergency contacts (default fallback)
-const DEFAULT_EMERGENCY_CONTACTS = [
-  '9999999999',
-  '8888888888'
-];
-
-// Send emergency SMS to all contacts
-async function sendEmergencySMS(lat, lng, customMessage = null, userId = null) {
-  const locationUrl = `https://maps.google.com/?q=${lat},${lng}`;
-  const message = customMessage || `HELP! I may be in danger. Location: ${locationUrl}`;
-
-  console.log('Emergency Message:', message);
-
-  // Get user-specific contacts if userId provided
-  let contacts = DEFAULT_EMERGENCY_CONTACTS;
-  if (userId) {
-    const user = await User.findOne({ userId });
-    if (user && user.emergencyContacts && user.emergencyContacts.length > 0) {
-      contacts = user.emergencyContacts.map(c => c.phone);
-    }
-  }
-  
-  for (const contact of contacts) {
-    try {
-      await sendSMS(contact, message);
-    } catch (error) {
-      console.error(`Failed to send SMS to ${contact}:`, error);
-    }
-  }
-}
 
 // Haversine formula for distance calculation (in km)
 function calculateDistance(lat1, lng1, lat2, lng2) {
@@ -901,7 +843,7 @@ app.post('/send-sos', validateLocation, async (req, res) => {
 
     console.log('SOS Alert Received:', { lat: latitude, lng: longitude });
 
-    await sendEmergencySMS(latitude, longitude, null, userId);
+    await smsService.sendEmergencySMS(latitude, longitude, null, userId);
 
     res.json({
       success: true,
@@ -988,7 +930,7 @@ app.post('/ride/add', async (req, res) => {
     const locationUrl = `https://maps.google.com/?q=${lat},${lng}`;
     const message = `🚗 RIDE STARTED\nVehicle: ${ride.vehicleNumber}\nType: ${ride.vehicleType}\nDriver: ${ride.driverName}\nLocation: ${locationUrl}`;
     
-    await sendEmergencySMS(lat || 0, lng || 0, message);
+    await smsService.sendEmergencySMS(lat || 0, lng || 0, message);
 
     res.json({
       success: true,
@@ -1067,7 +1009,7 @@ app.post('/ride/share', async (req, res) => {
     // Resend SMS
     const message = `🚗 RIDE REMINDER\nVehicle: ${ride.vehicleNumber}\nType: ${ride.vehicleType}\nDriver: ${ride.driverName}\nLocation: ${ride.location.address}`;
     
-    await sendEmergencySMS(ride.location.lat || 0, ride.location.lng || 0, message);
+    await smsService.sendEmergencySMS(ride.location.lat || 0, ride.location.lng || 0, message);
 
     res.json({
       success: true,
@@ -1743,25 +1685,59 @@ app.post('/route/suggest', async (req, res) => {
       });
     }
 
-    // For demo: Generate sample routes
-    // In production, use Google Directions API or Mapbox
-    const sampleRoutes = generateSampleRoutes(origin, destination);
+    const originCoords = {
+      lat: parseFloat(origin.lat || origin.latitude),
+      lng: parseFloat(origin.lng || origin.longitude)
+    };
+    const destCoords = {
+      lat: parseFloat(destination.lat || destination.latitude),
+      lng: parseFloat(destination.lng || destination.longitude)
+    };
 
-    // Calculate safety scores for each route
-    const routesWithSafety = [];
+    if (isNaN(originCoords.lat) || isNaN(originCoords.lng) || 
+        isNaN(destCoords.lat) || isNaN(destCoords.lng)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid coordinates'
+      });
+    }
 
-    for (const route of sampleRoutes) {
-      const safety = await calculateRouteSafety(route.points);
-      routesWithSafety.push({
-        ...route,
+    const [drivingResult, walkingResult] = await Promise.all([
+      directionsService.getDirections(originCoords, destCoords, 'driving'),
+      directionsService.getDirections(originCoords, destCoords, 'walking')
+    ]);
+
+    const routes = [];
+
+    if (drivingResult.success) {
+      const safety = await calculateRouteSafety(drivingResult.data.points);
+      routes.push({
+        ...drivingResult.data,
+        name: 'Fastest Route',
         safetyScore: safety.score,
         safetyAlerts: safety.alerts
       });
     }
 
-    // Sort by distance (fastest) and safety score
-    const fastestRoute = [...routesWithSafety].sort((a, b) => a.distance - b.distance)[0];
-    const safestRoute = [...routesWithSafety].sort((a, b) => b.safetyScore - a.safetyScore)[0];
+    if (walkingResult.success) {
+      const safety = await calculateRouteSafety(walkingResult.data.points);
+      routes.push({
+        ...walkingResult.data,
+        name: 'Safest Route',
+        safetyScore: safety.score,
+        safetyAlerts: safety.alerts
+      });
+    }
+
+    if (routes.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No routes found between these locations'
+      });
+    }
+
+    const fastestRoute = [...routes].sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance))[0];
+    const safestRoute = [...routes].sort((a, b) => b.safetyScore - a.safetyScore)[0];
 
     res.json({
       success: true,
@@ -1770,14 +1746,14 @@ app.post('/route/suggest', async (req, res) => {
         duration: fastestRoute.duration,
         points: fastestRoute.points,
         safetyScore: fastestRoute.safetyScore,
-        safetyAlerts: fastestRoute.safetyAlerts
+        safetyAlerts: fastestRoute.safetyAlerts || []
       },
       safest: {
         distance: safestRoute.distance,
         duration: safestRoute.duration,
         points: safestRoute.points,
         safetyScore: safestRoute.safetyScore,
-        safetyAlerts: safestRoute.safetyAlerts
+        safetyAlerts: safestRoute.safetyAlerts || []
       }
     });
 
@@ -1790,67 +1766,6 @@ app.post('/route/suggest', async (req, res) => {
     });
   }
 });
-
-// Helper function to generate sample routes (for demo)
-function generateSampleRoutes(origin, destination) {
-  const latDiff = destination.lat - origin.lat;
-  const lngDiff = destination.lng - origin.lng;
-
-  // Route 1: Direct/Shortest (simulated)
-  const directPoints = [];
-  const steps1 = 10;
-  for (let i = 0; i <= steps1; i++) {
-    directPoints.push({
-      lat: origin.lat + (latDiff * i / steps1),
-      lng: origin.lng + (lngDiff * i / steps1)
-    });
-  }
-
-  // Route 2: Alternative (longer but different path)
-  const altPoints = [];
-  const midLat = (origin.lat + destination.lat) / 2 + (Math.random() - 0.5) * 0.01;
-  const midLng = (origin.lng + destination.lng) / 2 + (Math.random() - 0.5) * 0.01;
-
-  const steps2 = 15;
-  for (let i = 0; i <= steps2; i++) {
-    const t = i / steps2;
-    const lat = Math.pow(1 - t, 2) * origin.lat + 2 * (1 - t) * t * midLat + Math.pow(t, 2) * destination.lat;
-    const lng = Math.pow(1 - t, 2) * origin.lng + 2 * (1 - t) * t * midLng + Math.pow(t, 2) * destination.lng;
-    altPoints.push({ lat, lng });
-  }
-
-  // Calculate approximate distances
-  let dist1 = 0;
-  for (let i = 0; i < directPoints.length - 1; i++) {
-    dist1 += calculateDistance(
-      directPoints[i].lat, directPoints[i].lng,
-      directPoints[i + 1].lat, directPoints[i + 1].lng
-    );
-  }
-
-  let dist2 = 0;
-  for (let i = 0; i < altPoints.length - 1; i++) {
-    dist2 += calculateDistance(
-      altPoints[i].lat, altPoints[i].lng,
-      altPoints[i + 1].lat, altPoints[i + 1].lng
-    );
-  }
-
-  return [
-    {
-      name: 'Fastest Route',
-      distance: dist1.toFixed(1),
-      duration: Math.round(dist1 * 3), // Assume 20 km/h avg
-      points: directPoints
-    },
-    {
-      name: 'Alternative Route',
-      distance: dist2.toFixed(1),
-      duration: Math.round(dist2 * 3),
-      points: altPoints
-    }
-  ];
-}
 
 // ==================== AUTO ALERT SYSTEM ====================
 
@@ -1880,7 +1795,7 @@ setInterval(async () => {
 
         const message = `URGENT! User has not checked in. Last known location: ${locationUrl}`;
         
-        await sendEmergencySMS(lastLocation.lat || 0, lastLocation.lng || 0, message);
+        await smsService.sendEmergencySMS(lastLocation.lat || 0, lastLocation.lng || 0, message);
 
         // Update trip status
         trip.status = 'alerted';

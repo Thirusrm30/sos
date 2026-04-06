@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  TextInput,
   TouchableOpacity,
   ScrollView,
   Alert,
@@ -14,34 +13,10 @@ import MapView, { Polyline, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { COLORS, FONTS, SPACING, RADIUS, SHADOWS, getSafetyColor, getSafetyLabel } from '../utils/constants';
 import { getCurrentLocation } from '../services/locationService';
 import { suggestRoutes } from '../services/routeService';
+import { reverseGeocode } from '../services/geocodingService';
+import AddressSearch from '../components/AddressSearch';
 
 const { width } = Dimensions.get('window');
-
-const parseCoordinates = (input) => {
-  if (!input) return null;
-  
-  const trimmed = input.trim();
-  
-  const commaMatch = trimmed.match(/^(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)$/);
-  if (commaMatch) {
-    const lat = parseFloat(commaMatch[1]);
-    const lng = parseFloat(commaMatch[2]);
-    if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-      return { lat, lng };
-    }
-  }
-  
-  const spaceMatch = trimmed.match(/^(-?\d+\.?\d*)\s+(-?\d+\.?\d*)$/);
-  if (spaceMatch) {
-    const lat = parseFloat(spaceMatch[1]);
-    const lng = parseFloat(spaceMatch[2]);
-    if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-      return { lat, lng };
-    }
-  }
-  
-  return null;
-};
 
 const SafeRouteScreen = ({ navigation }) => {
   const mapRef = useRef(null);
@@ -51,6 +26,7 @@ const SafeRouteScreen = ({ navigation }) => {
   const [currentLocation, setCurrentLocation] = useState(null);
   const [routes, setRoutes] = useState(null);
   const [selectedRoute, setSelectedRoute] = useState('fastest');
+  const [originCoords, setOriginCoords] = useState(null);
   const [destinationCoords, setDestinationCoords] = useState(null);
 
   useEffect(() => {
@@ -62,6 +38,7 @@ const SafeRouteScreen = ({ navigation }) => {
       const location = await getCurrentLocation();
       if (location) {
         setCurrentLocation(location);
+        setOriginCoords({ lat: location.lat, lng: location.lng });
       }
     } catch (error) {
       console.error('Error getting location:', error);
@@ -70,32 +47,55 @@ const SafeRouteScreen = ({ navigation }) => {
 
   const handleUseCurrentLocation = () => {
     if (currentLocation) {
-      setOrigin(`${currentLocation.lat.toFixed(4)}, ${currentLocation.lng.toFixed(4)}`);
+      setOriginCoords({ lat: currentLocation.lat, lng: currentLocation.lng });
+      setOrigin('Current Location');
     }
   };
 
-  const handleDestinationChange = (text) => {
-    setDestination(text);
-    const coords = parseCoordinates(text);
-    setDestinationCoords(coords);
+  const handleOriginSelect = (data) => {
+    if (data && data.lat && data.lng) {
+      setOriginCoords({ lat: data.lat, lng: data.lng });
+      setOrigin(data.address || data.name || 'Selected Location');
+    }
+  };
+
+  const handleDestinationSelect = (data) => {
+    if (data && data.lat && data.lng) {
+      setDestinationCoords({ lat: data.lat, lng: data.lng });
+      setDestination(data.address || data.name || 'Selected Location');
+    }
+  };
+
+  const parseCoordinates = (input) => {
+    if (!input) return null;
+    
+    const trimmed = input.trim();
+    
+    const commaMatch = trimmed.match(/^(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)$/);
+    if (commaMatch) {
+      const lat = parseFloat(commaMatch[1]);
+      const lng = parseFloat(commaMatch[2]);
+      if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+        return { lat, lng };
+      }
+    }
+    
+    return null;
   };
 
   const handleFindRoutes = async () => {
-    if (!destination.trim()) {
+    if (!destination.trim() && !destinationCoords) {
       Alert.alert('Required', 'Please enter a destination');
       return;
     }
 
-    const originCoords = currentLocation || null;
-    const destCoords = destinationCoords;
-
-    if (!originCoords && !destCoords) {
-      Alert.alert('Error', 'Unable to determine location. Please use current location or enter valid coordinates.');
+    if (!originCoords && !currentLocation) {
+      Alert.alert('Error', 'Unable to determine origin. Please use current location.');
       return;
     }
 
-    if (!destCoords) {
-      Alert.alert('Invalid Destination', 'Please enter destination in format: "latitude, longitude" (e.g., "12.95, 77.65")');
+    if (!destinationCoords) {
+      Alert.alert('Error', 'Please geocode the destination first by tapping "Search"');
       return;
     }
 
@@ -103,9 +103,9 @@ const SafeRouteScreen = ({ navigation }) => {
     try {
       const finalOrigin = originCoords 
         ? { lat: originCoords.lat, lng: originCoords.lng }
-        : null;
+        : { lat: currentLocation.lat, lng: currentLocation.lng };
 
-      const result = await suggestRoutes(finalOrigin, destCoords);
+      const result = await suggestRoutes(finalOrigin, destinationCoords);
 
       if (result.success) {
         setRoutes(result);
@@ -219,14 +219,17 @@ const SafeRouteScreen = ({ navigation }) => {
           <View style={styles.card}>
             <View style={styles.inputHeader}>
               <Text style={styles.label}>Origin</Text>
+              {originCoords && (
+                <Text style={styles.coordsValid}>✓ Location set</Text>
+              )}
             </View>
             <View style={styles.inputRow}>
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
+              <AddressSearch
+                style={{ flex: 1 }}
                 placeholder="Enter starting point"
-                placeholderTextColor={COLORS.textMuted}
                 value={origin}
                 onChangeText={setOrigin}
+                onSelect={handleOriginSelect}
               />
               <TouchableOpacity
                 style={styles.locationButton}
@@ -239,29 +242,24 @@ const SafeRouteScreen = ({ navigation }) => {
             <View style={styles.inputHeader}>
               <Text style={styles.label}>Destination</Text>
               {destinationCoords && (
-                <Text style={styles.coordsValid}>✓ Valid coordinates</Text>
+                <Text style={styles.coordsValid}>✓ Location found</Text>
               )}
             </View>
-            <TextInput
-              style={[
-                styles.input,
-                destinationCoords && styles.inputValid,
-              ]}
-              placeholder="Enter coordinates (e.g., 12.95, 77.65)"
-              placeholderTextColor={COLORS.textMuted}
+            <AddressSearch
+              placeholder="Enter destination"
               value={destination}
-              onChangeText={handleDestinationChange}
-              keyboardType="default"
+              onChangeText={setDestination}
+              onSelect={handleDestinationSelect}
             />
-            <Text style={styles.helperText}>
-              Enter as: latitude, longitude (e.g., 12.95, 77.65)
-            </Text>
           </View>
 
           <TouchableOpacity
-            style={[styles.button, loading && styles.buttonDisabled]}
+            style={[
+              styles.button, 
+              (loading || !destinationCoords) && styles.buttonDisabled
+            ]}
             onPress={handleFindRoutes}
-            disabled={loading}
+            disabled={loading || !destinationCoords}
             activeOpacity={0.8}
           >
             {loading ? (
@@ -269,7 +267,9 @@ const SafeRouteScreen = ({ navigation }) => {
             ) : (
               <>
                 <Text style={styles.buttonIcon}>🛡️</Text>
-                <Text style={styles.buttonText}>Find Routes</Text>
+                <Text style={styles.buttonText}>
+                  {!destinationCoords ? 'Search Destination First' : 'Find Routes'}
+                </Text>
               </>
             )}
           </TouchableOpacity>
@@ -290,22 +290,40 @@ const SafeRouteScreen = ({ navigation }) => {
             ref={mapRef}
             style={styles.map}
             initialRegion={{
-              latitude: currentLocation?.lat || 12.9,
-              longitude: currentLocation?.lng || 77.6,
+              latitude: (originCoords?.lat || currentLocation?.lat) || 12.9,
+              longitude: (originCoords?.lng || currentLocation?.lng) || 77.6,
               latitudeDelta: 0.05,
               longitudeDelta: 0.05,
             }}
             showsUserLocation
             showsMyLocationButton
           >
-            {currentLocation && (
+            {(originCoords || currentLocation) && (
               <Marker
-                coordinate={{ latitude: currentLocation.lat, longitude: currentLocation.lng }}
+                coordinate={{ 
+                  latitude: originCoords?.lat || currentLocation?.lat, 
+                  longitude: originCoords?.lng || currentLocation?.lng 
+                }}
                 title="Start"
                 description={origin}
               >
                 <View style={styles.markerStart}>
                   <Text style={styles.markerText}>A</Text>
+                </View>
+              </Marker>
+            )}
+            
+            {destinationCoords && (
+              <Marker
+                coordinate={{ 
+                  latitude: destinationCoords.lat, 
+                  longitude: destinationCoords.lng 
+                }}
+                title="Destination"
+                description={destination}
+              >
+                <View style={[styles.markerStart, { backgroundColor: COLORS.danger }]}>
+                  <Text style={styles.markerText}>B</Text>
                 </View>
               </Marker>
             )}
@@ -372,11 +390,19 @@ const styles = StyleSheet.create({
   },
   inputHeader: {
     marginBottom: SPACING.sm,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   label: {
     fontSize: FONTS.base,
     fontWeight: FONTS.semibold,
     color: COLORS.text,
+  },
+  coordsValid: {
+    fontSize: FONTS.xs,
+    color: COLORS.success,
+    fontWeight: FONTS.medium,
   },
   input: {
     backgroundColor: COLORS.surfaceSecondary,
@@ -385,22 +411,17 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.base,
     padding: SPACING.md,
     fontSize: FONTS.base,
-    marginBottom: SPACING.base,
+    marginBottom: SPACING.sm,
     color: COLORS.text,
   },
   inputValid: {
     borderColor: COLORS.success,
     backgroundColor: '#F0FDF4',
   },
-  coordsValid: {
+  formattedAddress: {
     fontSize: FONTS.xs,
-    color: COLORS.success,
-    fontWeight: FONTS.medium,
-  },
-  helperText: {
-    fontSize: FONTS.xs,
-    color: COLORS.textMuted,
-    marginTop: -SPACING.sm,
+    color: COLORS.textSecondary,
+    marginTop: -SPACING.xs,
     marginBottom: SPACING.base,
   },
   inputRow: {
@@ -417,6 +438,19 @@ const styles = StyleSheet.create({
   },
   locationButtonText: {
     fontSize: 20,
+  },
+  searchButton: {
+    backgroundColor: COLORS.info,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.base,
+    borderRadius: RADIUS.base,
+    alignItems: 'center',
+    marginTop: SPACING.xs,
+  },
+  searchButtonText: {
+    color: COLORS.textInverse,
+    fontSize: FONTS.sm,
+    fontWeight: FONTS.medium,
   },
   button: {
     backgroundColor: COLORS.accent,
