@@ -38,7 +38,7 @@ export const requestNotificationPermissions = async () => {
       name: 'SOS Alerts',
       importance: Notifications.AndroidImportance.MAX,
       vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#DC2626',
+      lightColor: '#FF3B30',
       sound: 'default',
     });
 

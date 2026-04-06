@@ -151,7 +151,7 @@ const CommunityStack = () => (
 );
 
 const BuddyStack = () => (
-  <Stack.Navigator screenOptions={screenOptions('#8B5CF6')}>
+  <Stack.Navigator screenOptions={screenOptions(COLORS.primary)}>
     <Stack.Screen 
       name="FindBuddy" 
       component={BuddyScreen} 

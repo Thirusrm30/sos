@@ -499,7 +499,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: FONTS['2xl'],
     fontWeight: FONTS.bold,
-    color: COLORS.text,
+    color: COLORS.primary,
   },
   destination: {
     fontSize: FONTS.base,
@@ -632,7 +632,7 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
   },
   errorContainer: {
-    backgroundColor: '#FEF2F2',
+    backgroundColor: '#FFF0F0',
     padding: SPACING.md,
     borderRadius: RADIUS.base,
   },

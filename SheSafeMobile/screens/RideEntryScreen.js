@@ -203,7 +203,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: FONTS['2xl'],
     fontWeight: FONTS.bold,
-    color: COLORS.text,
+    color: COLORS.primary,
     marginBottom: SPACING.xs,
   },
   subtitle: {
@@ -251,7 +251,7 @@ const styles = StyleSheet.create({
     borderColor: 'transparent',
   },
   vehicleTypeSelected: {
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#F0F1FF',
     borderColor: COLORS.accent,
   },
   vehicleTypeIcon: {
@@ -268,7 +268,7 @@ const styles = StyleSheet.create({
   },
   infoCard: {
     flexDirection: 'row',
-    backgroundColor: '#EFF6FF',
+    backgroundColor: '#F0F1FF',
     borderRadius: RADIUS.base,
     padding: SPACING.base,
     marginBottom: SPACING.lg,
@@ -282,7 +282,7 @@ const styles = StyleSheet.create({
   infoTitle: {
     fontSize: FONTS.sm,
     fontWeight: FONTS.semibold,
-    color: COLORS.info,
+    color: COLORS.primary,
     marginBottom: 2,
   },
   infoText: {

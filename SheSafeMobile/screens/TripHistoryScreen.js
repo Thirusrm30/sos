@@ -54,13 +54,13 @@ const TripHistoryScreen = ({ navigation }) => {
 
   const getStatusBadge = (status, isMarkedSafe) => {
     if (isMarkedSafe) {
-      return { text: '✅ Safe', color: COLORS.success, bg: '#DCFCE7' };
+      return { text: '✅ Safe', color: COLORS.success, bg: '#E8F5E9' };
     }
     if (status === 'alerted') {
-      return { text: '🚨 Alert', color: COLORS.danger, bg: '#FEE2E2' };
+      return { text: '🚨 Alert', color: COLORS.danger, bg: '#FFE5E5' };
     }
     if (status === 'active') {
-      return { text: '🟢 Active', color: COLORS.success, bg: '#DCFCE7' };
+      return { text: '🟢 Active', color: COLORS.success, bg: '#E8F5E9' };
     }
     return { text: '❌ Completed', color: COLORS.textMuted, bg: COLORS.surfaceSecondary };
   };
@@ -220,7 +220,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: FONTS['2xl'],
     fontWeight: FONTS.bold,
-    color: COLORS.text,
+    color: COLORS.primary,
     marginBottom: SPACING.xs,
   },
   subtitle: {

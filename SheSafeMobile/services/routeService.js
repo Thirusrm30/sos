@@ -20,10 +20,10 @@ export const suggestRoutes = async (origin, destination) => {
 
 // Get safety score color
 export const getSafetyColor = (score) => {
-  if (score >= 80) return '#22C55E'; // Green
+  if (score >= 80) return '#00C853'; // Green
   if (score >= 60) return '#F59E0B'; // Orange
-  if (score >= 40) return '#EF4444'; // Red
-  return '#DC2626'; // Dark Red
+  if (score >= 40) return '#FF6B61'; // Red
+  return '#FF3B30'; // Dark Red
 };
 
 // Get safety label

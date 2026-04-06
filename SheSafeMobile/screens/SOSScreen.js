@@ -525,7 +525,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: FONTS['3xl'],
     fontWeight: FONTS.bold,
-    color: COLORS.text,
+    color: COLORS.primary,
     textAlign: 'center',
   },
   subtitle: {
@@ -540,7 +540,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FEF3C7',
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
-    borderRadius: RADIUS.md,
+    borderRadius: RADIUS.full,
     marginBottom: SPACING.md,
     alignSelf: 'center',
   },
@@ -614,7 +614,7 @@ const styles = StyleSheet.create({
   },
   activeSection: {
     alignItems: 'center',
-    backgroundColor: '#DCFCE7',
+    backgroundColor: '#E8F5E9',
     padding: SPACING.xl,
     borderRadius: RADIUS.lg,
     width: '100%',
@@ -699,7 +699,7 @@ const styles = StyleSheet.create({
   },
   footerText: {
     fontSize: FONTS.sm,
-    color: COLORS.textMuted,
+    color: COLORS.primary,
     fontWeight: FONTS.medium,
   },
 });

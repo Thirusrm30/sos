@@ -121,7 +121,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FEF3C7',
   },
   online: {
-    backgroundColor: '#DCFCE7',
+    backgroundColor: '#E8F5E9',
   },
   icon: {
     fontSize: 14,

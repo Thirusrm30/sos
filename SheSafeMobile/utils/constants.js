@@ -1,5 +1,6 @@
 // API Configuration
 import { getApiUrl } from '../config/env';
+import THEME_COLORS from '../theme/colors';
 export const API_URL = getApiUrl();
 
 // SOS Configuration
@@ -13,58 +14,58 @@ export const MAX_MISSED_CHECKINS = 2;
 // ============================================
 
 export const COLORS = {
-  // Primary Colors
-  primary: '#DC2626', // Red - SOS / Emergency
-  primaryLight: '#EF4444',
-  primaryDark: '#B91C1C',
+  // Primary Colors (Purple)
+  primary: THEME_COLORS.primary,
+  primaryLight: THEME_COLORS.primaryLight,
+  primaryDark: THEME_COLORS.primaryDark,
   
-  // Secondary Colors
-  secondary: '#16A34A', // Green - Safe / Success
-  secondaryLight: '#22C55E',
-  secondaryDark: '#15803D',
+  // Secondary Colors (Light Purple)
+  secondary: THEME_COLORS.secondary,
+  secondaryLight: THEME_COLORS.secondaryLight,
+  secondaryDark: THEME_COLORS.secondaryDark,
   
-  // Accent Colors
-  accent: '#667EEA', // Indigo - Primary actions
-  accentLight: '#818CF8',
-  accentDark: '#4F46E5',
+  // Accent Colors (Purple)
+  accent: THEME_COLORS.accent,
+  accentLight: THEME_COLORS.accentLight,
+  accentDark: THEME_COLORS.accentDark,
   
   // Warning / Caution
-  warning: '#F59E0B', // Yellow/Orange
-  warningLight: '#FBBF24',
-  warningDark: '#D97706',
+  warning: THEME_COLORS.warning,
+  warningLight: THEME_COLORS.warningLight,
+  warningDark: THEME_COLORS.warningDark,
   
   // Neutral Colors
-  background: '#F8FAFC', // Light background
-  backgroundDark: '#1E293B', // Dark mode (future)
-  surface: '#FFFFFF',
-  surfaceSecondary: '#F1F5F9',
+  background: THEME_COLORS.background,
+  backgroundDark: THEME_COLORS.backgroundDark,
+  surface: THEME_COLORS.surface,
+  surfaceSecondary: THEME_COLORS.surfaceSecondary,
   
   // Text Colors
-  text: '#1E293B',
-  textSecondary: '#64748B',
-  textMuted: '#94A3B8',
-  textInverse: '#FFFFFF',
+  text: THEME_COLORS.text,
+  textSecondary: THEME_COLORS.textSecondary,
+  textMuted: THEME_COLORS.textMuted,
+  textInverse: THEME_COLORS.textInverse,
   
   // Border Colors
-  border: '#E2E8F0',
-  borderLight: '#F1F5F9',
+  border: THEME_COLORS.border,
+  borderLight: THEME_COLORS.borderLight,
   
   // Status Colors
-  danger: '#EF4444',
-  success: '#22C55E',
-  info: '#3B82F6',
-  warningStatus: '#F59E0B',
+  danger: THEME_COLORS.danger,
+  success: THEME_COLORS.success,
+  info: THEME_COLORS.info,
+  warningStatus: THEME_COLORS.warning,
   
   // Incident Colors (for map)
-  incidentHarassment: '#DC2626',
-  incidentLighting: '#F59E0B',
-  incidentRoad: '#F97316',
-  incidentSuspicious: '#8B5CF6',
-  incidentOther: '#6B7280',
+  incidentHarassment: THEME_COLORS.incidentHarassment,
+  incidentLighting: THEME_COLORS.incidentLighting,
+  incidentRoad: THEME_COLORS.incidentRoad,
+  incidentSuspicious: THEME_COLORS.incidentSuspicious,
+  incidentOther: THEME_COLORS.incidentOther,
   
   // Overlay
-  overlay: 'rgba(0, 0, 0, 0.5)',
-  overlayLight: 'rgba(0, 0, 0, 0.3)',
+  overlay: THEME_COLORS.overlay,
+  overlayLight: THEME_COLORS.overlayLight,
 };
 
 // ============================================
@@ -159,7 +160,7 @@ export const SHADOWS = {
     elevation: 8,
   },
   sos: {
-    shadowColor: '#DC2626',
+    shadowColor: THEME_COLORS.sosPrimary,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.5,
     shadowRadius: 20,

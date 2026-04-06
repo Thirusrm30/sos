@@ -251,7 +251,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: FONTS.xl,
     fontWeight: FONTS.bold,
-    color: COLORS.text,
+    color: COLORS.primary,
   },
   headerSubtitle: {
     fontSize: FONTS.sm,
@@ -306,18 +306,18 @@ const styles = StyleSheet.create({
   },
   matchScore: {
     alignItems: 'center',
-    backgroundColor: '#DEF7EC',
+    backgroundColor: '#F0F1FF',
     borderRadius: RADIUS.base,
     padding: SPACING.sm,
   },
   matchPercentage: {
     fontSize: FONTS.lg,
     fontWeight: FONTS.bold,
-    color: '#03543F',
+    color: COLORS.primary,
   },
   matchLabel: {
     fontSize: FONTS.xs,
-    color: '#03543F',
+    color: COLORS.primary,
   },
   routeInfo: {
     backgroundColor: COLORS.surfaceSecondary,

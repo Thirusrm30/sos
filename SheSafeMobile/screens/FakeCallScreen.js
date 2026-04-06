@@ -204,7 +204,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: FONTS['2xl'],
     fontWeight: FONTS.bold,
-    color: COLORS.text,
+    color: COLORS.primary,
     marginBottom: SPACING.sm,
   },
   subtitle: {

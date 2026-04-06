@@ -140,7 +140,7 @@ const styles = StyleSheet.create({
     ...SHADOWS.sos,
   },
   idleButton: {
-    backgroundColor: COLORS.primary,
+    backgroundColor: COLORS.danger,
   },
   activeButton: {
     backgroundColor: COLORS.success,
@@ -148,7 +148,7 @@ const styles = StyleSheet.create({
   countdownButton: {
     backgroundColor: COLORS.surface,
     borderWidth: 8,
-    borderColor: COLORS.primary,
+    borderColor: COLORS.danger,
   },
   buttonText: {
     fontSize: 56,
@@ -169,7 +169,7 @@ const styles = StyleSheet.create({
   countdownText: {
     fontSize: 80,
     fontWeight: FONTS.extrabold,
-    color: COLORS.primary,
+    color: COLORS.danger,
   },
   subText: {
     fontSize: FONTS.sm,
@@ -182,7 +182,7 @@ const styles = StyleSheet.create({
   subTextLight: {
     fontSize: FONTS.xs,
     fontWeight: FONTS.bold,
-    color: COLORS.primary,
+    color: COLORS.danger,
     marginTop: 8,
     letterSpacing: 1,
     textTransform: 'uppercase',

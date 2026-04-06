@@ -95,7 +95,7 @@ const LocationDisplay = ({ location, error, onRefresh, loading }) => {
 const styles = StyleSheet.create({
   container: {
     backgroundColor: COLORS.surface,
-    borderRadius: RADIUS.md,
+    borderRadius: RADIUS.lg,
     padding: SPACING.base,
     marginTop: SPACING.base,
     width: '100%',
@@ -126,14 +126,14 @@ const styles = StyleSheet.create({
     fontWeight: FONTS.medium,
   },
   addressContainer: {
-    backgroundColor: '#EFF6FF',
+    backgroundColor: '#F0F1FF',
     borderRadius: RADIUS.base,
     padding: SPACING.sm,
     marginBottom: SPACING.sm,
   },
   addressText: {
     fontSize: FONTS.sm,
-    color: COLORS.info,
+    color: COLORS.primary,
     fontWeight: FONTS.medium,
     lineHeight: 18,
   },
@@ -175,7 +175,7 @@ const styles = StyleSheet.create({
   errorContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FEF2F2',
+    backgroundColor: '#FFF0F0',
     borderRadius: RADIUS.base,
     padding: SPACING.base,
   },

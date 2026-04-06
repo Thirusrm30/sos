@@ -396,7 +396,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: FONTS['2xl'],
     fontWeight: FONTS.bold,
-    color: COLORS.text,
+    color: COLORS.primary,
     marginBottom: SPACING.xs,
   },
   subtitle: {
@@ -443,7 +443,7 @@ const styles = StyleSheet.create({
   },
   inputValid: {
     borderColor: COLORS.success,
-    backgroundColor: '#F0FDF4',
+    backgroundColor: '#E8F5E9',
   },
   inputRow: {
     flexDirection: 'row',
@@ -452,7 +452,7 @@ const styles = StyleSheet.create({
   resolvedContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F0FDF4',
+    backgroundColor: '#E8F5E9',
     padding: SPACING.sm,
     borderRadius: RADIUS.base,
     marginTop: -SPACING.sm,

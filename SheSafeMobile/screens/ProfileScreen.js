@@ -341,7 +341,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: FONTS['2xl'],
     fontWeight: FONTS.bold,
-    color: COLORS.text,
+    color: COLORS.primary,
     marginBottom: SPACING.xs,
   },
   subtitle: {
@@ -443,7 +443,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   removeButton: {
-    backgroundColor: '#FEE2E2',
+    backgroundColor: '#FFE5E5',
     width: 36,
     height: 36,
     borderRadius: 18,
@@ -486,7 +486,7 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.md,
   },
   addButton: {
-    backgroundColor: '#DCFCE7',
+    backgroundColor: '#E8F5E9',
     paddingVertical: SPACING.md,
     borderRadius: RADIUS.base,
     alignItems: 'center',

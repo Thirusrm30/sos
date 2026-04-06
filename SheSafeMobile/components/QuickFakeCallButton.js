@@ -38,7 +38,7 @@ const QuickFakeCallButton = ({ style }) => {
 
 const styles = StyleSheet.create({
   button: {
-    backgroundColor: COLORS.secondary,
+    backgroundColor: COLORS.primary,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
